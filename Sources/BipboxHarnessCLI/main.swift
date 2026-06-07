@@ -17,7 +17,7 @@ import Foundation
 func run() async {
     var baseDir: URL?
     var pretty = false
-    var args = Array(CommandLine.arguments.dropFirst())
+    let args = Array(CommandLine.arguments.dropFirst())
     var i = 0
     while i < args.count {
         switch args[i] {

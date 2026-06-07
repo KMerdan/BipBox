@@ -131,6 +131,7 @@ extension CenterHeader where Accessory == EmptyView {
 
 // MARK: Inspector shared pieces
 
+@MainActor
 func inspHead(_ trailingOnly: Bool = false) -> some View {
     HStack(spacing: 6) {
         if !trailingOnly {

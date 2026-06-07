@@ -158,7 +158,7 @@ public actor SQLiteVectorIndex: VectorIndex {
 
     private func bindBlob(_ data: Data, at index: Int32, _ stmt: OpaquePointer?) {
         data.withUnsafeBytes { raw in
-            sqlite3_bind_blob(stmt, index, raw.baseAddress, Int32(raw.count), SQLITE_TRANSIENT_VEC)
+            _ = sqlite3_bind_blob(stmt, index, raw.baseAddress, Int32(raw.count), SQLITE_TRANSIENT_VEC)
         }
     }
 

@@ -114,19 +114,26 @@ public struct WorkspaceRootView: View {
 
     private func loadDroppedURLs(_ providers: [NSItemProvider]) {
         let group = DispatchGroup()
-        var urls: [URL] = []
-        let lock = NSLock()
+        let collected = DroppedURLBox()
         for provider in providers {
             group.enter()
             _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                if let url { lock.lock(); urls.append(url); lock.unlock() }
+                if let url { collected.append(url) }
                 group.leave()
             }
         }
         group.notify(queue: .main) {
-            model.receiveDroppedURLs(urls)
+            model.receiveDroppedURLs(collected.urls)
         }
     }
+}
+
+/// Thread-safe accumulator for concurrent drop-provider callbacks.
+private final class DroppedURLBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [URL] = []
+    func append(_ url: URL) { lock.lock(); storage.append(url); lock.unlock() }
+    var urls: [URL] { lock.lock(); defer { lock.unlock() }; return storage }
 }
 
 // MARK: - Toolbar

@@ -139,7 +139,7 @@ public final class BipboxHarness {
     @discardableResult
     public func submitDrop(_ urls: [URL]) async -> WorkspaceSnapshot {
         let handler = services.dropIntakeHandler
-        _ = try? await handler.submit(
+        _ = await handler.submit(
             fileURLs: urls, source: .dragDrop, mode: .organize, receivedAt: Date()
         )
         await model.refresh()

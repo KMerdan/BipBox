@@ -342,7 +342,7 @@ private final class BipboxApplicationModel: ObservableObject {
     private static func overrideRuntimePaths() -> BipboxRuntimePaths? {
         #if DEBUG
         if let dir = ProcessInfo.processInfo.environment["BIPBOX_DATA_DIR"], !dir.isEmpty {
-            return try? BipboxRuntimePaths(baseDirectoryURL: URL(fileURLWithPath: dir, isDirectory: true))
+            return BipboxRuntimePaths(baseDirectoryURL: URL(fileURLWithPath: dir, isDirectory: true))
         }
         #endif
         return nil

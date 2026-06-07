@@ -26,7 +26,7 @@ final class WatchedFolderIndexingIntegrationTests: XCTestCase {
         let services = try BipboxAppServices.makeDefault(paths: BipboxRuntimePaths(baseDirectoryURL: base))
 
         // Add as a watched source (top-level policy = .never).
-        let result = try await services.sourceLifecycleCoordinator.addWatchedFolder(
+        _ = try await services.sourceLifecycleCoordinator.addWatchedFolder(
             SourceLifecycleRequest(url: watched, displayName: "Watched", recursivePolicy: .never)
         )
 
