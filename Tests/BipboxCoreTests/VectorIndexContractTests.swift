@@ -94,6 +94,10 @@ private actor InMemoryVectorIndex: VectorIndex {
         records[modelID]?[itemID] = nil
     }
 
+    func vectors(modelID: String) async throws -> [VectorRecord] {
+        Array(records[modelID, default: [:]].values)
+    }
+
     func nearest(to query: VectorSearchQuery) async throws -> [VectorMatch] {
         guard let dimension = dimensions[query.modelID] else {
             throw VectorIndexError.unsupportedModel(query.modelID)

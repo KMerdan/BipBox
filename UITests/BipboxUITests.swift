@@ -10,7 +10,7 @@ import XCTest
 final class BipboxUITests: XCTestCase {
     private var dataDir: URL!
     private var seedDir: URL!
-    private let port = 7913
+    private let port = Int.random(in: 8200...8999)
 
     override func setUpWithError() throws {
         continueAfterFailure = false

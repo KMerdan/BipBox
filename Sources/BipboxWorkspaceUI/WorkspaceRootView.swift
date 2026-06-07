@@ -143,6 +143,7 @@ private struct WorkspaceToolbar: View {
             }
             searchField
             Spacer(minLength: 8)
+            if model.presentation == .connections && !model.isSearching && model.section.isLibraryLike { groupByMenu }
             if model.section.isLibraryLike || model.isSearching { viewToggle }
             ToolbarButton(symbol: (appearance ?? scheme) == .dark ? "sun.max" : "moon") {
                 appearance = (appearance ?? scheme) == .dark ? .light : .dark
@@ -151,6 +152,24 @@ private struct WorkspaceToolbar: View {
         .padding(.horizontal, 14)
         .frame(height: 52)
         .background(BB.sidebar)
+    }
+
+    /// The quiet "Group by" switch — unobtrusive, defaults to Smart.
+    private var groupByMenu: some View {
+        Menu {
+            ForEach(LibraryLens.allCases) { lens in
+                Button { model.setLens(lens) } label: {
+                    if model.lens == lens { Label(lens.title, systemImage: "checkmark") } else { Text(lens.title) }
+                }
+            }
+        } label: {
+            Label("Group: \(model.lens.title)", systemImage: "circle.grid.2x2")
+                .font(.system(size: 12, weight: .medium)).foregroundStyle(BB.ink2)
+                .padding(.horizontal, 9).frame(height: 26)
+                .background(BB.chipBg, in: RoundedRectangle(cornerRadius: 7))
+        }
+        .menuStyle(.borderlessButton).fixedSize()
+        .accessibilityIdentifier("toolbar.groupby")
     }
 
     private var searchField: some View {

@@ -16,6 +16,10 @@ final class ConnectionsGraphWorkflowTests: XCTestCase {
         project = try E2ESupport.makeDummyProject()
         harness = try await makeStartedHarness()
         await harness.addFolder(project, depth: .always)
+        // These workflows assert structural navigation over the deterministic
+        // type clustering; semantic clustering is covered by SemanticGraphWorkflowTests.
+        harness.model.lens = .type
+        await harness.model.recomputeClusters()
     }
 
     override func tearDown() async throws {

@@ -38,6 +38,12 @@ public final class WorkspaceModel: ObservableObject {
     @Published public var query: String = ""
     @Published public var toast: String?
 
+    /// How the Connections graph groups items (the quiet "Group by" switch).
+    @Published public var lens: LibraryLens = .smart
+    /// Cached clusters for the current lens (recomputed async; semantic clustering
+    /// is async, so this is a stored cache rather than a live computed value).
+    @Published public private(set) var clusters: [LibraryCluster] = []
+
     /// Injected capture hook (drag-drop → real drop intake handler).
     public var onDropURLs: ([URL]) -> Void = { _ in }
 
@@ -202,6 +208,7 @@ public final class WorkspaceModel: ObservableObject {
         await library.search()
         await onboarding.load()
         await reviewQueue.load()
+        await recomputeClusters()
     }
 
     public func runSearch() async {
@@ -256,6 +263,7 @@ public final class WorkspaceModel: ObservableObject {
     /// Re-pull library + sources + queue (after a capture/scan).
     public func refresh() async {
         await library.search()
+        await recomputeClusters()
         await onboarding.load()
         await reviewQueue.load()
     }
@@ -264,15 +272,21 @@ public final class WorkspaceModel: ObservableObject {
     /// the first-run guidance.
     public var hasNoSources: Bool { onboarding.sources.isEmpty }
 
-    /// Open a folder picker, ask how deep to index, then add it as a watched source.
+    /// Open a folder picker, classify what it is, and capture it with a smart
+    /// default (no "top level vs deep" interrogation — we detect and just do it).
     public func addWatchedFolderViaPanel() {
         guard let url = WorkspaceModel.chooseFolder() else { return }
-        guard let policy = WorkspaceModel.askIndexDepth(for: url) else { return }
-        flash("Adding \(url.lastPathComponent)…")
+        let classification = DefaultTargetClassifier().classify(url: url)
+        flash("Adding \(url.lastPathComponent) as \(classification.nature.displayName)…")
         Task {
-            await onboarding.addCustomWatchedFolder(url, recursivePolicy: policy)
+            await onboarding.addCustomWatchedFolder(url, recursivePolicy: classification.recommendedPolicy)
             await refresh()
         }
+    }
+
+    /// Classify a folder's nature (for the smart-capture default + UI labels).
+    public static func classify(_ url: URL) -> TargetClassification {
+        DefaultTargetClassifier().classify(url: url)
     }
 
     static func chooseFolder() -> URL? {
@@ -282,26 +296,6 @@ public final class WorkspaceModel: ObservableObject {
         panel.allowsMultipleSelection = false
         panel.prompt = "Watch Folder"
         return panel.runModal() == .OK ? panel.url : nil
-    }
-
-    /// Ask the user how deep to index a folder. Returns nil if cancelled.
-    /// Top level → `.never` (subfolders captured as single items, not walked);
-    /// Everything inside → `.always` (recurse into every subfolder).
-    static func askIndexDepth(for url: URL) -> SourceRecursivePolicy? {
-        let alert = NSAlert()
-        alert.messageText = "How deep should Bipbox index “\(url.lastPathComponent)”?"
-        alert.informativeText = """
-        Top level only: index the files and folders directly inside, capturing each subfolder as one item.
-        Everything inside: recurse into every subfolder and index all files (slower for large trees).
-        """
-        alert.addButton(withTitle: "Top level only")   // .alertFirstButtonReturn
-        alert.addButton(withTitle: "Everything inside") // .alertSecondButtonReturn
-        alert.addButton(withTitle: "Cancel")            // .alertThirdButtonReturn
-        switch alert.runModal() {
-        case .alertFirstButtonReturn: return .never
-        case .alertSecondButtonReturn: return .always
-        default: return nil
-        }
     }
 
     public func flash(_ message: String) {
@@ -404,7 +398,9 @@ extension WorkspaceModel {
         BBPalette.color(for: Self.categoryOrder.firstIndex(of: name) ?? 0)
     }
 
-    public var clusters: [LibraryCluster] {
+    /// Tier-0 clusters: group by type category (used by the Type lens + as the
+    /// fallback when no embeddings are available).
+    func typeClusters() -> [LibraryCluster] {
         var buckets: [String: [UUID]] = [:]
         for it in library.results {
             buckets[typeCategory(for: it), default: []].append(it.id)
@@ -586,27 +582,25 @@ extension WorkspaceModel {
         }
     }
 
-    /// Cluster edges weighted by how many **folders** two type-categories share.
-    /// (Type clusters are disjoint by item, so item-overlap is always zero; folder
-    /// co-occurrence is the real structural signal — e.g. a project folder holding
-    /// code + docs + images links those three clusters.)
+    /// Cluster edges weighted by how many **folders** two clusters share. Works
+    /// for any clustering (type, semantic, source, …) via `clusterOf`.
     public func clusterLinks() -> [(Int, Int, Int)] {
         let cls = clusters
         guard cls.count > 1 else { return [] }
-        var indexByName: [String: Int] = [:]
-        for (i, c) in cls.enumerated() { indexByName[c.id] = i }
+        var indexByID: [String: Int] = [:]
+        for (i, c) in cls.enumerated() { indexByID[c.id] = i }
 
-        var categoriesByFolder: [String: Set<Int>] = [:]
+        var clustersByFolder: [String: Set<Int>] = [:]
         for it in library.results {
             let folder = (it.currentPath as NSString).deletingLastPathComponent
-            if let ci = indexByName[typeCategory(for: it)] {
-                categoriesByFolder[folder, default: []].insert(ci)
+            if let cl = clusterOf(it.id), let ci = indexByID[cl.id] {
+                clustersByFolder[folder, default: []].insert(ci)
             }
         }
 
         var pairCounts: [Int: Int] = [:]   // (i * cls.count + j) -> shared folder count
-        for (_, cats) in categoriesByFolder {
-            let arr = cats.sorted()
+        for (_, set) in clustersByFolder {
+            let arr = set.sorted()
             guard arr.count > 1 else { continue }
             for a in 0..<arr.count {
                 for b in (a + 1)..<arr.count {
@@ -618,6 +612,150 @@ extension WorkspaceModel {
     }
 }
 
+// MARK: - Group-by lens + cluster recomputation
+
+/// How the Connections graph groups items. "Smart" = semantic when embeddings are
+/// available, else falls back to type.
+public enum LibraryLens: String, CaseIterable, Sendable, Identifiable {
+    case smart, type, source, time
+    public var id: String { rawValue }
+    public var title: String {
+        switch self {
+        case .smart: "Smart"
+        case .type: "Type"
+        case .source: "Source"
+        case .time: "Time"
+        }
+    }
+}
+
+extension WorkspaceModel {
+    public func setLens(_ lens: LibraryLens) {
+        guard lens != self.lens else { return }
+        self.lens = lens
+        Task { await recomputeClusters() }
+    }
+
+    /// Recompute the cached `clusters` for the active lens. Semantic clustering is
+    /// async (reads the vector index); other lenses are synchronous.
+    public func recomputeClusters() async {
+        switch lens {
+        case .type:
+            clusters = typeClusters()
+        case .source:
+            clusters = sourceClusters()
+        case .time:
+            clusters = timeClusters()
+        case .smart:
+            clusters = await semanticClusters() ?? typeClusters()
+        }
+    }
+
+    private func sourceClusters() -> [LibraryCluster] {
+        var buckets: [UUID?: [UUID]] = [:]
+        for it in library.results { buckets[sourceID(of: it), default: []].append(it.id) }
+        return buckets.sorted { ($0.value.count) > ($1.value.count) }.enumerated().map { idx, entry in
+            let name = entry.key.flatMap { sid in sources.first { $0.id == sid }?.displayName } ?? "Loose files"
+            return LibraryCluster(id: "source:\(entry.key?.uuidString ?? "none")", name: name,
+                                  color: BBPalette.color(for: idx), itemIDs: entry.value)
+        }
+    }
+
+    private func timeClusters() -> [LibraryCluster] {
+        let fmt = DateFormatter(); fmt.dateFormat = "LLLL yyyy"
+        var buckets: [String: [UUID]] = [:]
+        for it in library.results { buckets[fmt.string(from: it.importedAt), default: []].append(it.id) }
+        return buckets.keys.sorted(by: >).enumerated().map { idx, key in
+            LibraryCluster(id: "time:\(key)", name: key, color: BBPalette.color(for: idx), itemIDs: buckets[key] ?? [])
+        }
+    }
+
+    /// Cluster items by embedding proximity (threshold union-find over the stored
+    /// vectors). Returns nil when no embeddings are available (caller falls back).
+    private func semanticClusters(threshold: Double = 0.55) async -> [LibraryCluster]? {
+        guard let services = graphServices, let vectorIndex = services.vectorIndex, let embedder = services.embedder
+        else { return nil }
+        guard let records = try? await vectorIndex.vectors(modelID: embedder.modelID), !records.isEmpty
+        else { return nil }
+
+        let ids = Set(library.results.map(\.id))
+        let vectors = records.filter { ids.contains($0.itemID) }
+        guard vectors.count >= 2 else { return nil }
+
+        // Union-find over pairs with cosine >= threshold.
+        var parent = Array(0..<vectors.count)
+        func find(_ x: Int) -> Int { var r = x; while parent[r] != r { parent[r] = parent[parent[r]]; r = parent[r] }; return r }
+        func union(_ a: Int, _ b: Int) { parent[find(a)] = find(b) }
+        for i in 0..<vectors.count {
+            for j in (i + 1)..<vectors.count where Self.cosine(vectors[i].vector, vectors[j].vector) >= threshold {
+                union(i, j)
+            }
+        }
+        var groups: [Int: [UUID]] = [:]
+        for i in vectors.indices { groups[find(i), default: []].append(vectors[i].itemID) }
+
+        // Entity vectors (folders/projects) for naming clusters by what they're near.
+        let entities = (try? await vectorIndex.vectors(modelID: VectorModel.entity(embedder.modelID))) ?? []
+        let vectorByID = Dictionary(uniqueKeysWithValues: vectors.map { ($0.itemID, $0.vector) })
+
+        let sorted = groups.values.sorted { $0.count > $1.count }
+        var result: [LibraryCluster] = []
+        for (idx, members) in sorted.enumerated() {
+            let label = entityLabel(for: members, vectorByID: vectorByID, entities: entities)
+                ?? clusterLabel(for: members)
+            result.append(LibraryCluster(id: "sem:\(idx)", name: label,
+                                         color: BBPalette.color(for: idx), itemIDs: members))
+        }
+        return result
+    }
+
+    /// Name a cluster by the entity (project/folder) nearest its centroid.
+    private func entityLabel(for members: [UUID], vectorByID: [UUID: [Float]], entities: [VectorRecord]) -> String? {
+        guard !entities.isEmpty else { return nil }
+        let memberVectors = members.compactMap { vectorByID[$0] }
+        guard let first = memberVectors.first else { return nil }
+        var centroid = [Float](repeating: 0, count: first.count)
+        for v in memberVectors where v.count == centroid.count {
+            for i in centroid.indices { centroid[i] += v[i] }
+        }
+        guard let unit = NLEmbeddingTextEmbedder.unitNormalized(centroid) else { return nil }
+        let best = entities.max { Self.cosine(unit, $0.vector) < Self.cosine(unit, $1.vector) }
+        guard let best, Self.cosine(unit, best.vector) > 0.4 else { return nil }
+        // Resolve the entity's display name via the graph store (best-effort).
+        return entityName(best.itemID)
+    }
+
+    private func entityName(_ id: UUID) -> String? {
+        // Folder/project contexts are named after the source folder.
+        sources.first { source in
+            source.url.map { KnowledgeIDs.folderContext(for: $0) == id } ?? false
+        }?.displayName
+    }
+
+    /// Label a semantic cluster by the most common significant token in member names.
+    private func clusterLabel(for members: [UUID]) -> String {
+        var counts: [String: Int] = [:]
+        for id in members {
+            guard let it = item(id) else { continue }
+            let base = (it.displayName as NSString).deletingPathExtension.lowercased()
+            for token in base.split(whereSeparator: { !$0.isLetter && !$0.isNumber }) where token.count > 2 {
+                counts[String(token), default: 0] += 1
+            }
+        }
+        if let top = counts.max(by: { $0.value < $1.value })?.key, counts[top]! > 1 {
+            return top.capitalized
+        }
+        return "Group \(members.count)"
+    }
+
+    static func cosine(_ a: [Float], _ b: [Float]) -> Double {
+        guard a.count == b.count else { return 0 }
+        var sum: Float = 0
+        for i in a.indices { sum += a[i] * b[i] }
+        return Double(sum)   // vectors are unit-normalized at embed time
+    }
+}
+
 // MARK: - Real graph services + async graph loading
 
 /// The services the Connections view needs to load real neighbors per node.
@@ -625,6 +763,23 @@ public struct WorkspaceGraphServices {
     public let graph: KnowledgeGraphService
     public let relatedness: RelatednessService
     public let store: KnowledgeStore
+    public var vectorIndex: VectorIndex?
+    public var embedder: TextEmbedder?
+
+    public init(
+        graph: KnowledgeGraphService,
+        relatedness: RelatednessService,
+        store: KnowledgeStore,
+        vectorIndex: VectorIndex? = nil,
+        embedder: TextEmbedder? = nil
+    ) {
+        self.graph = graph
+        self.relatedness = relatedness
+        self.store = store
+        self.vectorIndex = vectorIndex
+        self.embedder = embedder
+    }
+
     public init(graph: KnowledgeGraphService, relatedness: RelatednessService, store: KnowledgeStore) {
         self.graph = graph
         self.relatedness = relatedness
@@ -661,6 +816,26 @@ extension WorkspaceModel {
         }
     }
 
+    /// Nearest items by embedding cosine (the item's own stored vector → nearest),
+    /// as graph neighbors. Empty when embeddings/vectors are unavailable.
+    private func semanticNeighbors(of id: UUID, services: WorkspaceGraphServices, limit: Int) async -> [GraphNeighbor] {
+        guard let vectorIndex = services.vectorIndex, let embedder = services.embedder else { return [] }
+        guard let records = try? await vectorIndex.vectors(modelID: embedder.modelID),
+              let selfVector = records.first(where: { $0.itemID == id })?.vector else { return [] }
+        let query = VectorSearchQuery(modelID: embedder.modelID, vector: selfVector, limit: limit + 1)
+        guard let matches = try? await vectorIndex.nearest(to: query) else { return [] }
+        var out: [GraphNeighbor] = []
+        for match in matches where match.itemID != id {
+            guard let it = item(match.itemID) else { continue }
+            out.append(GraphNeighbor(id: "item:\(it.id)", selection: .item(it.id), name: it.displayName,
+                                     kind: "file", color: clusterOf(it.id)?.color ?? BB.ink2,
+                                     symbol: symbol(for: it), pred: "similar",
+                                     strength: min(1, max(0.3, match.score)), category: "Files", hubCount: 0))
+            if out.count >= limit { break }
+        }
+        return out
+    }
+
     private func loadItemGraph(_ id: UUID) async -> LoadedGraph {
         // Center from the library item, else the knowledge store.
         var center = graphCenter(for: .item(id))
@@ -694,8 +869,12 @@ extension WorkspaceModel {
             }
         }
 
-        // Related files from the relatedness service.
-        if let related = try? await services.relatedness.relatedItems(to: id, limit: 6) {
+        // Related files: prefer semantic neighbors (vector cosine); fall back to
+        // the lexical/temporal relatedness service when embeddings are absent.
+        let semantic = await semanticNeighbors(of: id, services: services, limit: 6)
+        if !semantic.isEmpty {
+            neighbors.append(contentsOf: semantic)
+        } else if let related = try? await services.relatedness.relatedItems(to: id, limit: 6) {
             for r in related where r.item.id != id {
                 neighbors.append(GraphNeighbor(id: "item:\(r.item.id)", selection: .item(r.item.id),
                                                name: r.item.displayName, kind: "file",

@@ -25,6 +25,11 @@ rendered UI:
 | P3 Folders are items (no recursion by default) | `test_P3_topLevelCapturesFoldersAsItems_recursiveWalksIn` | `testFoldersAreItems_SubfolderShownChildHidden` |
 | P4 Memory graph is the org layer | `test_P4_itemConnectsToContextAndContextListsMembers` | `testMemoryGraph_OverviewReachable` |
 | P4 Memory graph — full zoom journey & navigation | `ConnectionsGraphWorkflowTests` (9 workflows) | `ConnectionsGraphUITests` (zoom journey + re-center) |
+| Semantic retrieval (RAG over the index) | `SemanticRetrievalTests` (vector index, embedder, hybrid) | search box (semantic by default) |
+| Semantic graph + Group-by lens | `SemanticGraphWorkflowTests`, `TargetClassifierTests` | `toolbar.groupby` switch |
+| Optional language layer (LLM/RAG) | `SemanticAnswerServiceTests` (graceful no-LLM fallback) | n/a (opt-in) |
+
+> Semantic architecture: see `docs/semantic-retrieval.md`.
 | P5 Automation is policy (Inbox fallback) | `test_P5_rulesAreOptionalAndFallbackIsInbox` | `testInboxFallbackAndExplicitDecision` |
 | P6 AI/automation orchestrates, never silently mutates | `test_P6_decisionsRequireUserActionAndPreviewThePlan` | `testInboxFallbackAndExplicitDecision` (plan preview) |
 | Safety: index before action; activity records mutations | `test_Safety_indexBeforeAction_nothingMovedOnCapture` | `testActivity_RecordsMutations` |

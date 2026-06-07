@@ -34,6 +34,8 @@ public final class DefaultColdStartScanner: ColdStartScanner, @unchecked Sendabl
     private let searchService: SearchService?
     private let metadataExtractionService: MetadataExtractionService?
     private let activityLog: ActivityLog?
+    private let vectorIndex: VectorIndex?
+    private let embedder: TextEmbedder?
     private let fileManager: FileManager
 
     public init(
@@ -43,6 +45,8 @@ public final class DefaultColdStartScanner: ColdStartScanner, @unchecked Sendabl
         searchService: SearchService? = nil,
         metadataExtractionService: MetadataExtractionService? = nil,
         activityLog: ActivityLog? = nil,
+        vectorIndex: VectorIndex? = nil,
+        embedder: TextEmbedder? = nil,
         fileManager: FileManager = .default
     ) {
         self.permissionStore = permissionStore
@@ -51,6 +55,8 @@ public final class DefaultColdStartScanner: ColdStartScanner, @unchecked Sendabl
         self.searchService = searchService
         self.metadataExtractionService = metadataExtractionService
         self.activityLog = activityLog
+        self.vectorIndex = vectorIndex
+        self.embedder = embedder
         self.fileManager = fileManager
     }
 
@@ -75,7 +81,7 @@ public final class DefaultColdStartScanner: ColdStartScanner, @unchecked Sendabl
 
         let itemURLs = try scanCandidateURLs(rootURL: permissionRecord.url, recursive: request.recursive)
         let rootContext = ContextNode(
-            id: Self.stableUUID("folder-context:\(permissionRecord.url.standardizedFileURL.path)"),
+            id: KnowledgeIDs.folderContext(for: permissionRecord.url),
             kind: .folder,
             name: permissionRecord.url.lastPathComponent.isEmpty ? permissionRecord.url.path : permissionRecord.url.lastPathComponent,
             confidence: ConfidenceScore(1),
@@ -84,6 +90,7 @@ public final class DefaultColdStartScanner: ColdStartScanner, @unchecked Sendabl
             updatedAt: request.receivedAt
         )
         try await knowledgeStore.upsertContext(rootContext)
+        await embedEntity(rootContext)
 
         var scannedCount = 0
         var failures: [ColdStartScanFailure] = []
@@ -230,6 +237,7 @@ public final class DefaultColdStartScanner: ColdStartScanner, @unchecked Sendabl
         try await knowledgeStore.appendCaptureEvent(captureEvent)
         try await knowledgeStore.upsertRelationship(relationship)
         try await searchService?.index(makeIndexedItem(from: profile, request: organizationRequest, permissionRecord: permissionRecord))
+        await embedItem(profile)
         if !profile.metadata.isEmpty {
             try await knowledgeStore.upsertMetadataSnapshot(
                 itemID: profile.id,
@@ -245,6 +253,29 @@ public final class DefaultColdStartScanner: ColdStartScanner, @unchecked Sendabl
                 message: "Cold-start indexed \(profile.displayName).",
                 occurredAt: scanRequest.receivedAt
             )
+        )
+    }
+
+    /// Embed an item's name + extracted text into the vector index for semantic
+    /// retrieval. Best-effort: a failure here never blocks indexing.
+    private func embedItem(_ profile: ItemProfile) async {
+        guard let embedder, let vectorIndex else { return }
+        let text = [profile.displayName, profile.extractedTextSummary]
+            .compactMap { $0 }
+            .joined(separator: " ")
+        guard let vector = await embedder.embed(text) else { return }
+        try? await vectorIndex.upsertVector(
+            VectorRecord(itemID: profile.id, modelID: embedder.modelID, vector: vector)
+        )
+    }
+
+    /// Embed a context entity (folder / project) under a separate model namespace
+    /// so it can label semantic clusters without polluting item clustering.
+    private func embedEntity(_ context: ContextNode) async {
+        guard let embedder, let vectorIndex else { return }
+        guard let vector = await embedder.embed(context.name) else { return }
+        try? await vectorIndex.upsertVector(
+            VectorRecord(itemID: context.id, modelID: VectorModel.entity(embedder.modelID), vector: vector)
         )
     }
 

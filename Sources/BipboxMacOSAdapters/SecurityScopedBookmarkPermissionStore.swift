@@ -36,10 +36,26 @@ public struct BookmarkResolution: Equatable, Sendable {
 public struct SecurityScopedBookmarkResolver: BookmarkResolving {
     public init() {}
 
+    /// Security-scoped bookmarks require the App Sandbox (or document-scoped)
+    /// entitlement. This app currently ships non-sandboxed, where `.withSecurityScope`
+    /// bookmarks fail to resolve (and you don't need them — file access is direct).
+    /// Use security scope only when actually sandboxed.
+    private static var isSandboxed: Bool {
+        ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] != nil
+    }
+
+    private var creationOptions: URL.BookmarkCreationOptions {
+        Self.isSandboxed ? [.withSecurityScope] : []
+    }
+
+    private var resolutionOptions: URL.BookmarkResolutionOptions {
+        Self.isSandboxed ? [.withSecurityScope] : []
+    }
+
     public func makeBookmarkData(for url: URL) throws -> Data {
         do {
             return try url.bookmarkData(
-                options: [.withSecurityScope],
+                options: creationOptions,
                 includingResourceValuesForKeys: nil,
                 relativeTo: nil
             )
@@ -53,7 +69,7 @@ public struct SecurityScopedBookmarkResolver: BookmarkResolving {
         do {
             let url = try URL(
                 resolvingBookmarkData: data,
-                options: [.withSecurityScope],
+                options: resolutionOptions,
                 relativeTo: nil,
                 bookmarkDataIsStale: &isStale
             )

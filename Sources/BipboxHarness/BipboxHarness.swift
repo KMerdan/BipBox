@@ -39,7 +39,9 @@ public final class BipboxHarness {
             graphServices: WorkspaceGraphServices(
                 graph: services.knowledgeGraphService,
                 relatedness: services.relatednessService,
-                store: services.knowledgeStore
+                store: services.knowledgeStore,
+                vectorIndex: services.vectorIndex,
+                embedder: services.embedder
             )
         )
         let search = services.searchService

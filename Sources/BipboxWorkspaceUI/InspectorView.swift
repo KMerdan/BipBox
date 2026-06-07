@@ -245,13 +245,13 @@ struct OverviewInspector: View {
                 VStack(alignment: .leading, spacing: 0) {
                     InspSection(title: "Overview") {
                         VStack(alignment: .leading, spacing: 5) {
-                            Text("Your library, by type & location").font(BB.head()).foregroundStyle(BB.ink)
-                            Text("\(model.library.results.count) files in \(clusters.count) groups. Pick a group to zoom in, then a file — you never see every file at once. Lines link groups that share a folder.")
+                            Text("Your library, grouped by \(model.lens.title.lowercased())").font(BB.head()).foregroundStyle(BB.ink)
+                            Text("\(model.library.results.count) files in \(clusters.count) groups. Pick a group to zoom in, then a file — you never see every file at once. Switch the grouping with “Group” in the toolbar.")
                                 .font(BB.caption).foregroundStyle(BB.ink2)
                         }
                     }
                     WhyBox(lead: "A map, not a hairball", symbol: "point.3.connected.trianglepath.dotted",
-                           text: "Tier-0 groups files by kind and where they live. Deeper meaning-based grouping (embeddings) is a planned upgrade.").padding(.bottom, 18)
+                           text: "Smart grouping clusters files by meaning (on-device embeddings); Type, Source and Time are alternate lenses.").padding(.bottom, 18)
                     InspSection(title: "Clusters") {
                         VStack(spacing: 4) {
                             ForEach(clusters) { cl in

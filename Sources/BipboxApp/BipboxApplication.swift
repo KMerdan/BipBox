@@ -302,7 +302,9 @@ private final class BipboxApplicationModel: ObservableObject {
                 graphServices: WorkspaceGraphServices(
                     graph: services.knowledgeGraphService,
                     relatedness: services.relatednessService,
-                    store: services.knowledgeStore
+                    store: services.knowledgeStore,
+                    vectorIndex: services.vectorIndex,
+                    embedder: services.embedder
                 )
             )
             let dropHandler = services.dropIntakeHandler

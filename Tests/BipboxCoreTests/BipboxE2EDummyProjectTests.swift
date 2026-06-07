@@ -48,6 +48,8 @@ final class BipboxE2EDummyProjectTests: XCTestCase {
         XCTAssertEqual(snap.sources.count, 1)
 
         // Tier-0 clusters span multiple type categories (not one degenerate bucket).
+        harness.model.lens = .type
+        await harness.model.recomputeClusters()
         let clusters = Set(harness.model.clusters.map(\.name))
         XCTAssertTrue(clusters.contains("Documents"))
         XCTAssertTrue(clusters.contains("Images"))

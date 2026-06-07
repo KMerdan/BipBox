@@ -360,16 +360,20 @@ public final class OnboardingWorkspaceViewModel: ObservableObject {
     }
 
     private func syncSelectionsWithSources() {
-        for source in sources {
-            guard let role = sourceRole(from: source) else {
-                continue
-            }
-            update(role: role) {
-                $0.url = source.url
-                $0.state = .completed
-                $0.message = source.lastScanSummary?.message ?? "Persisted watched source."
-                $0.sourceID = source.id
-                $0.scannedCount = source.lastScanSummary?.indexedCount ?? 0
+        for index in selections.indices {
+            let role = selections[index].role
+            if let source = sources.first(where: { sourceRole(from: $0) == role }) {
+                selections[index].url = source.url
+                selections[index].state = .completed
+                selections[index].message = source.lastScanSummary?.message ?? "Persisted watched source."
+                selections[index].sourceID = source.id
+                selections[index].scannedCount = source.lastScanSummary?.indexedCount ?? 0
+            } else if selections[index].state == .completed
+                || selections[index].state == .saved
+                || selections[index].sourceID != nil {
+                // The source backing this preset was removed — revert to a fresh
+                // "not added" state so Quick Add stops showing it as Added.
+                selections[index] = OnboardingFolderSelection(role: role)
             }
         }
     }

@@ -65,6 +65,30 @@ final class OnboardingWorkspaceViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.selections.first(where: { $0.role == .downloads })?.sourceID, source.id)
     }
 
+    func testRemovingSourceResetsQuickAddPreset() async throws {
+        // A persisted preset source renders the Quick Add row as "Added".
+        let downloadsURL = URL(fileURLWithPath: "/Downloads", isDirectory: true)
+        let source = SourceFixtures.watchedFolder(
+            url: downloadsURL,
+            metadata: OnboardingFolderRole.downloads.metadata
+        )
+        let sourceStore = MockSourceStore(sourceRecords: [source])
+        let coordinator = CapturingSourceLifecycleCoordinator(sourceStore: sourceStore)
+        let viewModel = OnboardingWorkspaceViewModel(
+            sourceStore: sourceStore,
+            lifecycleCoordinator: coordinator
+        )
+        await viewModel.load()
+        XCTAssertEqual(viewModel.selections.first(where: { $0.role == .downloads })?.state, .completed)
+
+        // Removing the watched folder must revert the preset to "not added".
+        await viewModel.removeWatchedFolder(id: source.id)
+
+        let downloads = viewModel.selections.first(where: { $0.role == .downloads })
+        XCTAssertEqual(downloads?.state, .pending, "Quick Add should no longer show Added after delete")
+        XCTAssertNil(downloads?.sourceID)
+    }
+
     func testSourceActionsCallLifecycleAndRefreshRows() async throws {
         let source = SourceFixtures.watchedFolder(metadata: OnboardingFolderRole.downloads.metadata)
         let sourceStore = MockSourceStore(sourceRecords: [source])

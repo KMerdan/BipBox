@@ -173,7 +173,7 @@ private struct QuickAddRow: View {
         // Prefer the well-known URL for common roles; fall back to a picker.
         let url = Self.defaultURL(for: role) ?? WorkspaceModel.chooseFolder()
         guard let url else { return }
-        guard let policy = WorkspaceModel.askIndexDepth(for: url) else { return }
+        let policy = WorkspaceModel.classify(url).recommendedPolicy
         Task { await vm.addPresetWatchedFolder(role: role, url: url, recursivePolicy: policy); await model.refresh() }
     }
 

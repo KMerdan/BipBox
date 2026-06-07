@@ -56,6 +56,10 @@ public struct BipboxRuntimePaths: Equatable {
         dataDirectoryURL.appendingPathComponent("Sources", isDirectory: true)
     }
 
+    public var vectorIndexDirectoryURL: URL {
+        dataDirectoryURL.appendingPathComponent("Vectors", isDirectory: true)
+    }
+
     public var defaultLibraryRootURL: URL {
         baseDirectoryURL.appendingPathComponent("Library", isDirectory: true)
     }
@@ -74,6 +78,7 @@ public struct BipboxRuntimePaths: Equatable {
             permissionsDirectoryURL,
             settingsDirectoryURL,
             sourcesDirectoryURL,
+            vectorIndexDirectoryURL,
             defaultLibraryRootURL,
             defaultInboxURL
         ] {

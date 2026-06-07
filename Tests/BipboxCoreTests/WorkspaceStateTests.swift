@@ -90,6 +90,8 @@ final class WorkspaceModelTests: XCTestCase {
             indexedItemFixture(path: "/U/Downloads/proj", name: "proj", kind: .folder),
         ]
         let model = await makeModel(items: items)
+        model.lens = .type
+        await model.recomputeClusters()
         let clusters = model.clusters
 
         // None of these have tags, yet they must NOT collapse into one bucket.
@@ -108,6 +110,8 @@ final class WorkspaceModelTests: XCTestCase {
             indexedItemFixture(path: "/U/Project/diagram.png", name: "diagram.png", kind: .file),
         ]
         let model = await makeModel(items: items)
+        model.lens = .type
+        await model.recomputeClusters()
         let links = model.clusterLinks()
         XCTAssertFalse(links.isEmpty, "Categories sharing a folder must produce an edge")
     }

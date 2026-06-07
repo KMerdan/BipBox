@@ -106,6 +106,8 @@ public protocol VectorIndex: Sendable {
     func upsertVector(_ record: VectorRecord) async throws
     func deleteVector(itemID: UUID, modelID: String) async throws
     func nearest(to query: VectorSearchQuery) async throws -> [VectorMatch]
+    /// All stored vectors for a model (for clustering / centroid work).
+    func vectors(modelID: String) async throws -> [VectorRecord]
 }
 
 enum VectorValidation {

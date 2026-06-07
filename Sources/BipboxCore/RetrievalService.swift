@@ -79,17 +79,26 @@ public final class DefaultRetrievalService: RetrievalService {
     private let searchService: SearchService
     private let knowledgeStore: KnowledgeStore?
     private let graphService: KnowledgeGraphService?
+    private let vectorIndex: VectorIndex?
+    private let embedder: TextEmbedder?
+    private let semanticWeight: Double
     private let candidateLimit: Int
 
     public init(
         searchService: SearchService,
         knowledgeStore: KnowledgeStore? = nil,
         graphService: KnowledgeGraphService? = nil,
+        vectorIndex: VectorIndex? = nil,
+        embedder: TextEmbedder? = nil,
+        semanticWeight: Double = 0,
         candidateLimit: Int = 500
     ) {
         self.searchService = searchService
         self.knowledgeStore = knowledgeStore
         self.graphService = graphService
+        self.vectorIndex = vectorIndex
+        self.embedder = embedder
+        self.semanticWeight = semanticWeight
         self.candidateLimit = candidateLimit
     }
 
@@ -110,6 +119,7 @@ public final class DefaultRetrievalService: RetrievalService {
             )
         )
         let text = query.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let semanticByID = await semanticScores(text: text, limit: max(query.limit, candidateLimit))
         var results: [RetrievalResult] = []
 
         for item in searchResults.items {
@@ -121,7 +131,11 @@ public final class DefaultRetrievalService: RetrievalService {
                 continue
             }
 
-            let scored = score(item: item, knowledgeItem: knowledgeItem, text: text, sourceIDs: query.sourceIDs)
+            var scored = score(item: item, knowledgeItem: knowledgeItem, text: text, sourceIDs: query.sourceIDs)
+            if let semantic = semanticByID[item.id], semantic > 0 {
+                scored.score = min(1, scored.score + semanticWeight * semantic)
+                scored.explanations.append("Semantically related.")
+            }
             if text.isEmpty || scored.score > 0 {
                 results.append(scored)
             }
@@ -138,6 +152,19 @@ public final class DefaultRetrievalService: RetrievalService {
         }
 
         return RetrievalResults(items: Array(sorted.prefix(query.limit)), totalCount: sorted.count)
+    }
+
+    /// Semantic similarity of each candidate to the query, via the vector index.
+    /// Returns [:] when semantics are disabled or the query can't be embedded —
+    /// retrieval then falls back to lexical + graph only.
+    private func semanticScores(text: String, limit: Int) async -> [UUID: Double] {
+        guard semanticWeight > 0, !text.isEmpty, let embedder, let vectorIndex else { return [:] }
+        guard let vector = await embedder.embed(text) else { return [:] }
+        let query = VectorSearchQuery(modelID: embedder.modelID, vector: vector, limit: limit)
+        guard let matches = try? await vectorIndex.nearest(to: query) else { return [:] }
+        var scores: [UUID: Double] = [:]
+        for match in matches { scores[match.itemID] = max(0, match.score) }
+        return scores
     }
 
     private func sourceMatches(_ sourceIDs: [UUID], item: IndexedItem, knowledgeItem: KnowledgeItem?) -> Bool {

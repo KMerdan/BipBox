@@ -8,7 +8,8 @@ import XCTest
 final class ConnectionsGraphUITests: XCTestCase {
     private var dataDir: URL!
     private var seedDir: URL!
-    private let port = 7915
+    // Unique per test instance — avoids a still-releasing prior app shadowing the next.
+    private let port = Int.random(in: 8200...8999)
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -73,6 +74,27 @@ final class ConnectionsGraphUITests: XCTestCase {
         XCTAssertTrue(overviewCrumb.waitForExistence(timeout: 5), "Breadcrumb offers Overview")
         overviewCrumb.click()
         XCTAssertTrue(cluster.waitForExistence(timeout: 10), "Breadcrumb returns to the Overview clusters")
+    }
+
+    // MARK: Group-by lens switch re-clusters the graph
+
+    func testGroupByLensSwitch() {
+        let app = launchedAppInConnections()
+        let cluster = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'graph.cluster.'")).firstMatch
+        XCTAssertTrue(cluster.waitForExistence(timeout: 15), "Overview clusters render")
+
+        let groupBy = app.descendants(matching: .any)["toolbar.groupby"]
+        XCTAssertTrue(groupBy.waitForExistence(timeout: 5), "Quiet Group-by switch exists")
+        groupBy.click()
+        let typeItem = app.menuItems["Type"]
+        XCTAssertTrue(typeItem.waitForExistence(timeout: 5), "Group-by offers lens options")
+        typeItem.click()
+
+        // After switching lens, the overview still renders clusters.
+        XCTAssertTrue(app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'graph.cluster.'")).firstMatch
+            .waitForExistence(timeout: 10), "Switching lens re-renders clusters")
     }
 
     // MARK: clicking a node re-centers (no dead-end)

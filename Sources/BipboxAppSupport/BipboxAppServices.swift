@@ -34,6 +34,8 @@ public final class BipboxAppServices {
     public let pipeline: DefaultOrganizationPipeline
     public let intakeService: IntakeService
     public let dropIntakeHandler: DropIntakeHandling
+    public let vectorIndex: VectorIndex
+    public let embedder: TextEmbedder
 
     public init(
         paths: BipboxRuntimePaths,
@@ -64,7 +66,9 @@ public final class BipboxAppServices {
         watchFolderAutomation: WatchFolderAutomationService,
         pipeline: DefaultOrganizationPipeline,
         intakeService: IntakeService,
-        dropIntakeHandler: DropIntakeHandling
+        dropIntakeHandler: DropIntakeHandling,
+        vectorIndex: VectorIndex,
+        embedder: TextEmbedder
     ) {
         self.paths = paths
         self.workflow = workflow
@@ -95,6 +99,8 @@ public final class BipboxAppServices {
         self.pipeline = pipeline
         self.intakeService = intakeService
         self.dropIntakeHandler = dropIntakeHandler
+        self.vectorIndex = vectorIndex
+        self.embedder = embedder
     }
 
     public static func makeDefault(
@@ -117,10 +123,19 @@ public final class BipboxAppServices {
             searchService: searchService,
             graphService: knowledgeGraphService
         )
+        // Semantic layer: on-device embeddings + SQLite vector index. Gated by
+        // BIPBOX_SEMANTIC (default on); set to "0" to A/B against lexical-only.
+        let vectorIndex = try SQLiteVectorIndex(directoryURL: runtimePaths.vectorIndexDirectoryURL)
+        let embedder = NLEmbeddingTextEmbedder()
+        let semanticEnabled = ProcessInfo.processInfo.environment["BIPBOX_SEMANTIC"] != "0"
+        let semanticWeight = semanticEnabled ? 0.6 : 0
         let retrievalService = DefaultRetrievalService(
             searchService: searchService,
             knowledgeStore: knowledgeStore,
-            graphService: knowledgeGraphService
+            graphService: knowledgeGraphService,
+            vectorIndex: vectorIndex,
+            embedder: embedder,
+            semanticWeight: semanticWeight
         )
         let missingFileRecoveryService = DefaultMissingFileRecoveryService(
             knowledgeStore: knowledgeStore,
@@ -144,6 +159,8 @@ public final class BipboxAppServices {
             searchService: searchService,
             metadataExtractionService: metadataExtractionService,
             activityLog: activityLog,
+            vectorIndex: semanticEnabled ? vectorIndex : nil,
+            embedder: semanticEnabled ? embedder : nil,
             fileManager: fileManager
         )
         let appSettingsStore = try JSONAppSettingsStore(directoryURL: runtimePaths.settingsDirectoryURL)
@@ -239,7 +256,9 @@ public final class BipboxAppServices {
             watchFolderAutomation: watchFolderAutomation,
             pipeline: pipeline,
             intakeService: intakeService,
-            dropIntakeHandler: dropIntakeHandler
+            dropIntakeHandler: dropIntakeHandler,
+            vectorIndex: vectorIndex,
+            embedder: embedder
         )
     }
 
