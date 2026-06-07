@@ -287,6 +287,72 @@ final class RulesWorkspaceViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.selectedBranch?.node.actions.first?.parameters["destination"], "/Library/Photos")
         XCTAssertNil(viewModel.newRuleDraft)
     }
+    // MARK: redesign rules CRUD/toggle
+
+    func testAddBlankRulePersistsAndSelects() async throws {
+        let directory = try TemporaryDirectory()
+        let store = try JSONRuleDocumentStore(directoryURL: directory.url)
+        let vm = RulesWorkspaceViewModel(workflow: emptyWorkflow(), ruleStore: store)
+
+        let id = await vm.addBlankRule()
+
+        XCTAssertEqual(vm.selectedBranchID, id)
+        XCTAssertEqual(vm.ruleDocuments.count, 1)
+
+        let reloaded = RulesWorkspaceViewModel(workflow: emptyWorkflow(), ruleStore: store)
+        await reloaded.loadRuleFiles()
+        XCTAssertEqual(reloaded.ruleDocuments.count, 1)
+    }
+
+    func testDisablingRuleKeepsItOnDiskButOutOfWorkflow() async throws {
+        let directory = try TemporaryDirectory()
+        let store = try JSONRuleDocumentStore(directoryURL: directory.url)
+        let vm = RulesWorkspaceViewModel(workflow: emptyWorkflow(), ruleStore: store)
+        let branch = vm.addFileRule(name: "PNGs", fileExtension: "png", destinationPath: "/x")
+        await vm.saveRuleFiles()
+
+        await vm.setRuleEnabled(id: branch.id, false)
+
+        // Disabled rule is dropped from the active workflow…
+        XCTAssertTrue(vm.workflow.root.branches.isEmpty)
+        // …but kept in the document list (and on disk).
+        XCTAssertEqual(vm.ruleDocuments.count, 1)
+        XCTAssertEqual(vm.ruleDocuments.first?.enabled, false)
+
+        let reloaded = RulesWorkspaceViewModel(workflow: emptyWorkflow(), ruleStore: store)
+        await reloaded.loadRuleFiles()
+        XCTAssertEqual(reloaded.ruleDocuments.count, 1, "Disabled rule must survive a reload, not be deleted")
+        XCTAssertEqual(reloaded.ruleDocuments.first?.enabled, false)
+    }
+
+    func testDeleteRuleRemovesItFromDisk() async throws {
+        let directory = try TemporaryDirectory()
+        let store = try JSONRuleDocumentStore(directoryURL: directory.url)
+        let vm = RulesWorkspaceViewModel(workflow: emptyWorkflow(), ruleStore: store)
+        let branch = vm.addFileRule(name: "PNGs", fileExtension: "png", destinationPath: "/x")
+        await vm.saveRuleFiles()
+
+        await vm.deleteRule(id: branch.id)
+        XCTAssertTrue(vm.ruleDocuments.isEmpty)
+
+        let reloaded = RulesWorkspaceViewModel(workflow: emptyWorkflow(), ruleStore: store)
+        await reloaded.loadRuleFiles()
+        XCTAssertTrue(reloaded.ruleDocuments.isEmpty)
+    }
+
+    func testRenameRulePersists() async throws {
+        let directory = try TemporaryDirectory()
+        let store = try JSONRuleDocumentStore(directoryURL: directory.url)
+        let vm = RulesWorkspaceViewModel(workflow: emptyWorkflow(), ruleStore: store)
+        let branch = vm.addFileRule(name: "Old", fileExtension: "png", destinationPath: "/x")
+        await vm.saveRuleFiles()
+
+        await vm.renameRule(id: branch.id, to: "New Name")
+
+        let reloaded = RulesWorkspaceViewModel(workflow: emptyWorkflow(), ruleStore: store)
+        await reloaded.loadRuleFiles()
+        XCTAssertEqual(reloaded.ruleDocuments.first?.name, "New Name")
+    }
 }
 
 private func emptyWorkflow() -> Workflow {

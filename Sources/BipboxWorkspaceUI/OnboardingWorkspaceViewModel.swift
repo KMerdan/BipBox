@@ -178,12 +178,12 @@ public final class OnboardingWorkspaceViewModel: ObservableObject {
         isCompleted = errorMessage == nil
     }
 
-    public func addPresetWatchedFolder(role: OnboardingFolderRole, url: URL) async {
-        await addWatchedFolder(url, role: role, displayName: role.title)
+    public func addPresetWatchedFolder(role: OnboardingFolderRole, url: URL, recursivePolicy: SourceRecursivePolicy = .never) async {
+        await addWatchedFolder(url, role: role, displayName: role.title, recursivePolicy: recursivePolicy)
     }
 
-    public func addCustomWatchedFolder(_ url: URL) async {
-        await addWatchedFolder(url, role: nil, displayName: url.lastPathComponent.nilIfEmpty ?? url.path)
+    public func addCustomWatchedFolder(_ url: URL, recursivePolicy: SourceRecursivePolicy = .never) async {
+        await addWatchedFolder(url, role: nil, displayName: url.lastPathComponent.nilIfEmpty ?? url.path, recursivePolicy: recursivePolicy)
     }
 
     public func replaceWatchedFolder(id: UUID, with url: URL) async {
@@ -273,7 +273,7 @@ public final class OnboardingWorkspaceViewModel: ObservableObject {
         await setSourcePaused(false, id: id)
     }
 
-    private func addWatchedFolder(_ url: URL, role: OnboardingFolderRole?, displayName: String) async {
+    private func addWatchedFolder(_ url: URL, role: OnboardingFolderRole?, displayName: String, recursivePolicy: SourceRecursivePolicy = .never) async {
         guard let lifecycleCoordinator else {
             errorMessage = "Source management is unavailable."
             return
@@ -297,7 +297,7 @@ public final class OnboardingWorkspaceViewModel: ObservableObject {
                     displayName: displayName,
                     metadata: sourceMetadata(role: role, url: url),
                     enabled: true,
-                    recursivePolicy: .never
+                    recursivePolicy: recursivePolicy
                 )
             )
             if let role {

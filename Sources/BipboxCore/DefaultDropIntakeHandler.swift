@@ -1,6 +1,6 @@
 import Foundation
 
-public final class DefaultDropIntakeHandler: DropIntakeHandling {
+public final class DefaultDropIntakeHandler: DropIntakeHandling, @unchecked Sendable {
     private let intakeService: IntakeService
     private let itemInspector: ItemInspector
     private let sourceStore: SourceStore?

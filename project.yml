@@ -1,0 +1,91 @@
+# XcodeGen spec for the rendered-UI test harness.
+#
+# Generates Bipbox.xcodeproj with:
+#   - a macOS App target (Bipbox) built from Sources/BipboxApp + the SwiftPM
+#     package's library products,
+#   - a UI testing bundle (BipboxUITests) that drives the rendered app via the
+#     accessibility identifiers in BipboxWorkspaceUI.
+#
+# Generate + run:  scripts/ui-test.sh   (or: xcodegen generate && xcodebuild test ...)
+name: Bipbox
+options:
+  bundleIdPrefix: local.bipbox
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+packages:
+  Bipbox:
+    path: .
+
+settings:
+  base:
+    # Local ad-hoc signing so UI tests can launch/attach without a dev team.
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Manual
+    DEVELOPMENT_TEAM: ""
+    SWIFT_VERSION: "6.0"
+
+targets:
+  Bipbox:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/BipboxApp
+        excludes:
+          - "Resources/Info.plist"
+    dependencies:
+      - package: Bipbox
+        product: BipboxAppSupport
+      - package: Bipbox
+        product: BipboxWorkspaceUI
+      - package: Bipbox
+        product: BipboxMenuBarUI
+      - package: Bipbox
+        product: BipboxMacOSAdapters
+      - package: Bipbox
+        product: BipboxPersistence
+      - package: Bipbox
+        product: BipboxAI
+      - package: Bipbox
+        product: BipboxCore
+    settings:
+      base:
+        INFOPLIST_FILE: Sources/BipboxApp/Resources/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: local.bipbox.app
+        PRODUCT_NAME: Bipbox
+        # The shared Info.plist declares CFBundleExecutable = BipboxApp; the
+        # executable name must match or codesign can't find the main binary.
+        EXECUTABLE_NAME: BipboxApp
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+        ENABLE_HARDENED_RUNTIME: NO
+        # Xcode 16+/26 emit a separate debug dylib + preview dylib that break
+        # ad-hoc bundle signing for command-line UI test runs. Disable both.
+        ENABLE_DEBUG_DYLIB: NO
+        ENABLE_PREVIEWS: NO
+
+  BipboxUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - UITests
+    dependencies:
+      - target: Bipbox
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.bipbox.uitests
+        TEST_TARGET_NAME: Bipbox
+        GENERATE_INFOPLIST_FILE: "YES"
+
+schemes:
+  Bipbox:
+    build:
+      targets:
+        Bipbox: all
+        BipboxUITests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - BipboxUITests

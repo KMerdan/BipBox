@@ -319,6 +319,90 @@ public final class RulesWorkspaceViewModel: ObservableObject {
         onWorkflowChanged?(workflow)
     }
 
+    /// Delete a rule by id and persist the change.
+    public func deleteRule(id: UUID) async {
+        ruleDocuments.removeAll { $0.id == id }
+        workflow.root.branches.removeAll { $0.id == id }
+        if selectedBranchID == id { selectedBranchID = workflow.root.branches.first?.id }
+        onWorkflowChanged?(workflow)
+        await persistRuleDocuments()
+    }
+
+    /// Toggle a rule's enabled flag and persist. Disabled rules stay in the list
+    /// (and on disk) but are dropped from the active workflow.
+    public func setRuleEnabled(id: UUID, _ enabled: Bool) async {
+        // Make sure every branch has a backing document before toggling.
+        syncRuleDocumentsFromWorkflowPreservingState()
+        if let index = ruleDocuments.firstIndex(where: { $0.id == id }) {
+            ruleDocuments[index].enabled = enabled
+        }
+        ruleDocuments = ruleDocuments.sortedForWorkflow()
+        workflow = Workflow.fromRuleDocuments(ruleDocuments)
+        onWorkflowChanged?(workflow)
+        await persistRuleDocuments()
+    }
+
+    /// Create a starter rule the user can then edit, and persist it.
+    @discardableResult
+    public func addBlankRule() async -> UUID {
+        syncRuleDocumentsFromWorkflowPreservingState()
+        let id = UUID()
+        let document = RuleDocument(
+            id: id,
+            name: "New Rule",
+            enabled: true,
+            position: ruleDocuments.count,
+            conditions: [ConditionDescriptor(field: .fileExtension, operation: .equals, value: "pdf")],
+            action: RuleActionDocument(operation: .markNeedsReview, requiresReview: true)
+        )
+        ruleDocuments.append(document)
+        ruleDocuments = ruleDocuments.sortedForWorkflow()
+        workflow = Workflow.fromRuleDocuments(ruleDocuments)
+        selectedBranchID = id
+        onWorkflowChanged?(workflow)
+        await persistRuleDocuments()
+        return id
+    }
+
+    /// Rename a rule and persist.
+    public func renameRule(id: UUID, to name: String) async {
+        syncRuleDocumentsFromWorkflowPreservingState()
+        if let index = ruleDocuments.firstIndex(where: { $0.id == id }) {
+            ruleDocuments[index].name = name
+        }
+        if let bIndex = workflow.root.branches.firstIndex(where: { $0.id == id }) {
+            workflow.root.branches[bIndex].name = name
+            workflow.root.branches[bIndex].node.name = name
+        }
+        onWorkflowChanged?(workflow)
+        await persistRuleDocuments()
+    }
+
+    /// Persist the current `ruleDocuments` (including disabled ones) to the store.
+    private func persistRuleDocuments() async {
+        guard ruleStore != nil else {
+            ruleFilesMessage = "Rule file storage is not connected."
+            return
+        }
+        isSavingRuleFiles = true
+        errorMessage = nil
+        do {
+            try await saveRuleDocuments(ruleDocuments)
+            ruleFilesMessage = "Saved \(ruleDocuments.count) rule file(s)."
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        isSavingRuleFiles = false
+    }
+
+    /// Refresh documents from the workflow without losing disabled documents
+    /// (which the workflow does not contain).
+    private func syncRuleDocumentsFromWorkflowPreservingState() {
+        let derived = Self.documents(from: workflow)
+        let disabled = ruleDocuments.filter { doc in !derived.contains { $0.id == doc.id } }
+        ruleDocuments = (derived + disabled).sortedForWorkflow()
+    }
+
     public func addConditionToSelectedBranch(
         field: ConditionField,
         operation: ConditionOperator,

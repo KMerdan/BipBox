@@ -52,6 +52,10 @@ private final class BipboxApplicationDelegate: NSObject, NSApplicationDelegate {
     private lazy var viewModel = MenuBarStatusViewModel(commandHandler: commands)
     private var menuBarController: MenuBarStatusItemController?
     private var workspaceWindow: NSWindow?
+    private var controlServer: WorkspaceControlServer?
+
+    /// The shared Settings view model surfaced in the `Settings { }` scene (Cmd+,).
+    var settingsViewModel: SettingsWorkspaceViewModel { applicationModel.workspaceViewModels.settings }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -62,6 +66,41 @@ private final class BipboxApplicationDelegate: NSObject, NSApplicationDelegate {
         }
         menuBarController = MenuBarStatusItemController(viewModel: viewModel)
         showWorkspaceWindow()
+        startControlAPIIfRequested()
+        seedFolderIfRequested()
+    }
+
+    private func seedFolderIfRequested() {
+        #if DEBUG
+        let env = ProcessInfo.processInfo.environment
+        if let seed = env["BIPBOX_SEED_FOLDER"], !seed.isEmpty {
+            let url = URL(fileURLWithPath: seed, isDirectory: true)
+            Task { await applicationModel.seedWatchedFolder(url) }
+        }
+        if let n = env["BIPBOX_SEED_PENDING"].flatMap(Int.init), n > 0 {
+            Task { await applicationModel.workspaceModel.apply(WorkspaceCommand(action: WorkspaceAction.seedPending, target: String(n))) }
+        }
+        if let n = env["BIPBOX_SEED_MISSING"].flatMap(Int.init), n > 0 {
+            Task { await applicationModel.workspaceModel.apply(WorkspaceCommand(action: WorkspaceAction.seedMissing, target: String(n))) }
+        }
+        #endif
+    }
+
+    /// Debug-only localhost control API for automation. Opt in with
+    /// `BIPBOX_CONTROL_API=1` (optionally `BIPBOX_CONTROL_TOKEN`, `BIPBOX_CONTROL_PORT`).
+    private func startControlAPIIfRequested() {
+        #if DEBUG
+        let env = ProcessInfo.processInfo.environment
+        guard env["BIPBOX_CONTROL_API"] == "1" else { return }
+        let port = env["BIPBOX_CONTROL_PORT"].flatMap(UInt16.init) ?? 7777
+        let server = WorkspaceControlServer(
+            model: applicationModel.workspaceModel,
+            port: port,
+            token: env["BIPBOX_CONTROL_TOKEN"]
+        )
+        server.start()
+        controlServer = server
+        #endif
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -76,7 +115,7 @@ private final class BipboxApplicationDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        let rootView = WorkspaceRootView(viewModels: applicationModel.workspaceViewModels)
+        let rootView = WorkspaceRootView(model: applicationModel.workspaceModel)
         let hostingView = NSHostingView(rootView: rootView)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1100, height: 720),
@@ -207,6 +246,7 @@ private final class BipboxWatchFolderRefresher: WatchedFolderRefreshing, Watched
 private final class BipboxApplicationModel: ObservableObject {
     let services: BipboxAppServices?
     let workspaceViewModels: WorkspaceViewModels
+    let workspaceModel: WorkspaceModel
     private let searchResultActions: BipboxSearchResultActions
     private let watchFolderRefresher: BipboxWatchFolderRefresher?
     @Published private(set) var startupError: String?
@@ -216,7 +256,7 @@ private final class BipboxApplicationModel: ObservableObject {
         self.searchResultActions = searchResultActions
 
         do {
-            let services = try BipboxAppServices.makeDefault()
+            let services = try BipboxAppServices.makeDefault(paths: Self.overrideRuntimePaths())
             self.services = services
             let watchFolderRefresher = BipboxWatchFolderRefresher(automation: services.watchFolderAutomation)
             self.watchFolderRefresher = watchFolderRefresher
@@ -257,6 +297,30 @@ private final class BipboxApplicationModel: ObservableObject {
                     appSettingsStore: services.appSettingsStore
                 )
             )
+            let model = WorkspaceModel(
+                workspaceViewModels,
+                graphServices: WorkspaceGraphServices(
+                    graph: services.knowledgeGraphService,
+                    relatedness: services.relatednessService,
+                    store: services.knowledgeStore
+                )
+            )
+            let dropHandler = services.dropIntakeHandler
+            model.onDropURLs = { urls in
+                Task {
+                    _ = await dropHandler.submit(fileURLs: urls, source: .dragDrop, mode: .organize, receivedAt: Date())
+                }
+            }
+            let search = services.searchService
+            let base = services.paths.baseDirectoryURL
+            model.pendingSeeder = { count in
+                await seedPendingReviewItems(count: count, into: search, baseDirectory: base)
+            }
+            let store = services.knowledgeStore
+            model.missingSeeder = { count in
+                await seedMissingItems(count: count, into: search, knowledgeStore: store, baseDirectory: base)
+            }
+            workspaceModel = model
             startupError = nil
             Task {
                 try? await services.watchFolderAutomation.reloadWatchedFolders()
@@ -265,9 +329,27 @@ private final class BipboxApplicationModel: ObservableObject {
         } catch {
             services = nil
             watchFolderRefresher = nil
-            workspaceViewModels = WorkspaceViewModels()
+            let fixtures = WorkspaceViewModels()
+            workspaceViewModels = fixtures
+            workspaceModel = WorkspaceModel(fixtures)
             startupError = error.localizedDescription
         }
+    }
+
+    /// DEBUG: route the data store to an isolated directory for UI/automation tests.
+    private static func overrideRuntimePaths() -> BipboxRuntimePaths? {
+        #if DEBUG
+        if let dir = ProcessInfo.processInfo.environment["BIPBOX_DATA_DIR"], !dir.isEmpty {
+            return try? BipboxRuntimePaths(baseDirectoryURL: URL(fileURLWithPath: dir, isDirectory: true))
+        }
+        #endif
+        return nil
+    }
+
+    /// DEBUG: seed a watched folder on launch so UI tests have deterministic data.
+    func seedWatchedFolder(_ url: URL) async {
+        await workspaceModel.onboarding.addCustomWatchedFolder(url, recursivePolicy: .never)
+        await workspaceModel.refresh()
     }
 
     func submitDroppedURLs(_ urls: [URL]) {
@@ -304,7 +386,8 @@ struct BipboxApplication: App {
 
     var body: some Scene {
         Settings {
-            EmptyView()
+            SettingsWorkspaceView(viewModel: appDelegate.settingsViewModel)
+                .frame(minWidth: 460, minHeight: 420)
         }
     }
 }

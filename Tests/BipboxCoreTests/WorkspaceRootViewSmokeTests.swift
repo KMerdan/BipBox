@@ -9,13 +9,23 @@ final class WorkspaceRootViewSmokeTests: XCTestCase {
         XCTAssertNotNil(String(describing: view))
     }
 
-    func testWorkspaceRootViewCanRenderEachSectionFixture() {
-        for section in WorkspaceSection.allCases {
-            let state = WorkspaceState(selectedSection: section)
-            let view = WorkspaceRootView(state: state)
+    func testWorkspaceRootViewCanInitializeWithViewModelsAndHandlers() {
+        var dropped: [URL] = []
+        let view = WorkspaceRootView(
+            viewModels: WorkspaceViewModels(),
+            openSettings: {},
+            onDropURLs: { dropped = $0 }
+        )
 
-            XCTAssertNotNil(String(describing: view))
-            XCTAssertEqual(state.selectedSection, section)
+        XCTAssertNotNil(String(describing: view))
+        XCTAssertTrue(dropped.isEmpty)
+    }
+
+    func testWorkspaceModelRendersEachSection() {
+        let model = WorkspaceModel(WorkspaceViewModels())
+        for nav in [WorkspaceNav.allItems, .recents, .inbox, .sources, .rules, .activity] {
+            model.go(nav)
+            XCTAssertEqual(model.section, nav)
         }
     }
 }

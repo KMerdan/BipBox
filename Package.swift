@@ -9,6 +9,8 @@ let package = Package(
     ],
     products: [
         .executable(name: "BipboxApp", targets: ["BipboxApp"]),
+        .executable(name: "bipbox-harness", targets: ["BipboxHarnessCLI"]),
+        .library(name: "BipboxHarness", targets: ["BipboxHarness"]),
         .library(name: "BipboxCore", targets: ["BipboxCore"]),
         .library(name: "BipboxWorkspaceUI", targets: ["BipboxWorkspaceUI"]),
         .library(name: "BipboxMenuBarUI", targets: ["BipboxMenuBarUI"]),
@@ -29,6 +31,18 @@ let package = Package(
                 "BipboxAI"
             ],
             exclude: ["Resources/Info.plist"]
+        ),
+        .target(
+            name: "BipboxHarness",
+            dependencies: [
+                "BipboxAppSupport",
+                "BipboxWorkspaceUI",
+                "BipboxCore"
+            ]
+        ),
+        .executableTarget(
+            name: "BipboxHarnessCLI",
+            dependencies: ["BipboxHarness", "BipboxWorkspaceUI", "BipboxCore"]
         ),
         .target(name: "BipboxCore"),
         .target(
@@ -68,6 +82,7 @@ let package = Package(
             dependencies: [
                 "BipboxAI",
                 "BipboxAppSupport",
+                "BipboxHarness",
                 "BipboxCore",
                 "BipboxMenuBarUI",
                 "BipboxWorkspaceUI",

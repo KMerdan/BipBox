@@ -12,7 +12,7 @@ public protocol FolderWatcher {
     func stop() async
 }
 
-public protocol DropIntakeHandling {
+public protocol DropIntakeHandling: Sendable {
     func submit(
         fileURLs: [URL],
         source: IntakeSource,
