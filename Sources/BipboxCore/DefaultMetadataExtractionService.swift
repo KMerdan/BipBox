@@ -47,6 +47,9 @@ public final class DefaultMetadataExtractionService: MetadataExtractionService, 
                 return MetadataExtractionResult(metadata: metadata, warnings: warnings)
             }
 
+            // Keep a bounded slice of the raw text so it can feed lexical search
+            // and embeddings (not just NLP-derived tokens).
+            metadata["text.content"] = String(text.prefix(4000))
             metadata.merge(Self.naturalLanguageMetadata(from: text)) { _, new in new }
         } catch {
             warnings.append("Text extraction failed: \(error.localizedDescription)")

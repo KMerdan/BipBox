@@ -260,13 +260,19 @@ public final class DefaultColdStartScanner: ColdStartScanner, @unchecked Sendabl
     /// retrieval. Best-effort: a failure here never blocks indexing.
     private func embedItem(_ profile: ItemProfile) async {
         guard let embedder, let vectorIndex else { return }
-        let text = [profile.displayName, profile.extractedTextSummary]
-            .compactMap { $0 }
-            .joined(separator: " ")
-        guard let vector = await embedder.embed(text) else { return }
+        guard let vector = await embedder.embed(Self.embedText(for: profile)) else { return }
         try? await vectorIndex.upsertVector(
             VectorRecord(itemID: profile.id, modelID: embedder.modelID, vector: vector)
         )
+    }
+
+    /// The text that represents an item for indexing/embedding: name + extracted
+    /// content (falling back to NLP tokens).
+    private static func embedText(for profile: ItemProfile) -> String {
+        let content = profile.extractedTextSummary
+            ?? profile.metadata["text.content"]
+            ?? profile.metadata["nl.tokens"]?.replacingOccurrences(of: ",", with: " ")
+        return [profile.displayName, content].compactMap { $0 }.joined(separator: " ")
     }
 
     /// Embed a context entity (folder / project) under a separate model namespace
@@ -315,7 +321,7 @@ public final class DefaultColdStartScanner: ColdStartScanner, @unchecked Sendabl
             routedAt: nil,
             ruleID: nil,
             tags: Array(Set(tags)).sorted(),
-            extractedText: item.extractedTextSummary,
+            extractedText: item.extractedTextSummary ?? item.metadata["text.content"],
             aiSummary: "Indexed in place from \(permissionRecord.url.lastPathComponent).",
             status: .indexedOnly
         )
