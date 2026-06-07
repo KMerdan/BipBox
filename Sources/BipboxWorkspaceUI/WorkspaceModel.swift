@@ -415,7 +415,7 @@ extension WorkspaceModel {
     }
 
     func cluster(_ id: String) -> LibraryCluster? { clusters.first { $0.id == id } }
-    func clusterOf(_ itemID: UUID) -> LibraryCluster? { clusters.first { $0.itemIDs.contains(itemID) } }
+    public func clusterOf(_ itemID: UUID) -> LibraryCluster? { clusters.first { $0.itemIDs.contains(itemID) } }
 
     // MARK: hub (source / collection / cluster / context) metadata + members
 

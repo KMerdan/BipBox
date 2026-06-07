@@ -164,6 +164,10 @@ public struct WorkspaceSnapshot: Codable, Sendable, Equatable {
     public struct GraphSnapshot: Codable, Sendable, Equatable {
         public var center: String?
         public var neighbors: [NeighborSummary]
+        public init(center: String?, neighbors: [NeighborSummary]) {
+            self.center = center
+            self.neighbors = neighbors
+        }
     }
     public struct NeighborSummary: Codable, Sendable, Equatable {
         public var name: String

@@ -51,6 +51,7 @@ struct Crumbs: View {
                         Text(part.name).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(BB.ink2)
                             .padding(.horizontal, 7).padding(.vertical, 5)
                     }.buttonStyle(.plain)
+                    .accessibilityIdentifier("graph.crumb.\(WorkspaceModel.selectionString(part.sel))")
                 } else {
                     Text(part.name).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(BB.ink)
                         .padding(.horizontal, 7).padding(.vertical, 5).lineLimit(1)
@@ -130,7 +131,7 @@ struct EgoGraph: View {
                 ForEach(Array(visible.enumerated()), id: \.offset) { i, n in
                     label(n, at: midpoint(layout, i), active: hov == i)
                 }
-                if let cm { CenterCard(center: cm).position(x: layout.cx, y: layout.cy) }
+                if let cm { CenterCard(center: cm).accessibilityIdentifier("graph.center").position(x: layout.cx, y: layout.cy) }
                 ForEach(Array(visible.enumerated()), id: \.offset) { i, n in
                     node(n, index: i, at: layout.pts[i])
                 }
@@ -254,6 +255,7 @@ struct OverviewGraph: View {
                 }
             }
         }.buttonStyle(.plain)
+            .accessibilityIdentifier("graph.cluster.\(c.id)")
             .opacity(dimmed ? 0.32 : 1)
             .onHover { hov = $0 ? i : (hov == i ? nil : hov) }
             .position(x: p.x, y: p.y)
@@ -346,6 +348,7 @@ struct GraphNode: View {
                 }
             }
         }.buttonStyle(.plain).fixedSize()
+        .accessibilityIdentifier("graph.node.\(neighbor.id)")
     }
 }
 

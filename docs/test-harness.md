@@ -24,6 +24,7 @@ rendered UI:
 | P2 Sources are first-class | `test_P2_sourcePersistsWithStateAndLifecycle` | `testSourceFirstClass_PauseReflectsInUI` |
 | P3 Folders are items (no recursion by default) | `test_P3_topLevelCapturesFoldersAsItems_recursiveWalksIn` | `testFoldersAreItems_SubfolderShownChildHidden` |
 | P4 Memory graph is the org layer | `test_P4_itemConnectsToContextAndContextListsMembers` | `testMemoryGraph_OverviewReachable` |
+| P4 Memory graph — full zoom journey & navigation | `ConnectionsGraphWorkflowTests` (9 workflows) | `ConnectionsGraphUITests` (zoom journey + re-center) |
 | P5 Automation is policy (Inbox fallback) | `test_P5_rulesAreOptionalAndFallbackIsInbox` | `testInboxFallbackAndExplicitDecision` |
 | P6 AI/automation orchestrates, never silently mutates | `test_P6_decisionsRequireUserActionAndPreviewThePlan` | `testInboxFallbackAndExplicitDecision` (plan preview) |
 | Safety: index before action; activity records mutations | `test_Safety_indexBeforeAction_nothingMovedOnCapture` | `testActivity_RecordsMutations` |
