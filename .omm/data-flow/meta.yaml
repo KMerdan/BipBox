@@ -1,0 +1,17 @@
+created: 2026-06-11T08:01:43.451Z
+updated: 2026-06-11T08:02:09.072Z
+update_count: 7
+last_field: note
+git_commit: "7959126"
+git_branch: main
+children:
+  - backfill
+  - connections-graph
+  - descender
+  - embedder
+  - extraction
+  - scanner
+  - search-index
+  - topic-discovery
+  - vector-index
+  - watched-folder

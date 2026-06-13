@@ -1,0 +1,1 @@
+WorkspaceModel (MainActor) is large and accumulates lens/cluster/graph/library responsibilities. Watched-folder arrivals after the initial scan bypass the FilesystemDescender unit classification (they index as untagged loose files until a rescan).

@@ -1,0 +1,1 @@
+External input: the folders the user grants (target use: ~/Downloads, ~/Documents, ~/localGit). DefaultSourceLifecycleCoordinator turns an added folder into a permission record (security-scoped bookmark), an initial recursive scan, and a PollingFolderWatcher subscription for new arrivals.

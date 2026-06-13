@@ -20,7 +20,8 @@ public enum SearchIndexError: Error, Equatable, LocalizedError {
 }
 
 public actor SQLiteSearchIndex: SearchService, SearchIndexRemoving {
-    public static let schemaVersion = 1
+    // 2: content_fingerprint column (incremental rescan change detection).
+    public static let schemaVersion = 2
 
     private let databaseURL: URL
     nonisolated(unsafe) private var database: OpaquePointer?
@@ -105,6 +106,14 @@ public actor SQLiteSearchIndex: SearchService, SearchIndexRemoving {
     }
 
     private static func migrate(_ database: OpaquePointer?) throws {
+        // Refuse data dirs written by a NEWER app version — additive migrations
+        // only run forward.
+        let onDiskVersion = try readUserVersion(database)
+        guard onDiskVersion <= schemaVersion else {
+            throw SearchIndexError.sqlite(
+                "Search index schema v\(onDiskVersion) is newer than this app supports (v\(schemaVersion)). Update Bipbox.")
+        }
+
         try execute("PRAGMA journal_mode=WAL", database: database)
         try execute(
             """
@@ -124,11 +133,15 @@ public actor SQLiteSearchIndex: SearchService, SearchIndexRemoving {
                 tags_json TEXT NOT NULL,
                 extracted_text TEXT,
                 ai_summary TEXT,
-                status TEXT NOT NULL
+                status TEXT NOT NULL,
+                content_fingerprint TEXT
             )
             """,
             database: database
         )
+        // v1 -> v2: additive column (no-op on fresh databases).
+        try addColumnIfMissing(
+            table: "indexed_items", column: "content_fingerprint", definition: "TEXT", database: database)
         try execute(
             """
             CREATE VIRTUAL TABLE IF NOT EXISTS indexed_items_fts USING fts5(
@@ -144,6 +157,33 @@ public actor SQLiteSearchIndex: SearchService, SearchIndexRemoving {
             database: database
         )
         try execute("PRAGMA user_version = \(Self.schemaVersion)", database: database)
+    }
+
+    private static func readUserVersion(_ database: OpaquePointer?) throws -> Int {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, "PRAGMA user_version", -1, &statement, nil) == SQLITE_OK,
+              sqlite3_step(statement) == SQLITE_ROW else {
+            sqlite3_finalize(statement)
+            throw SearchIndexError.sqlite(errorMessage(database))
+        }
+        defer { sqlite3_finalize(statement) }
+        return Int(sqlite3_column_int(statement, 0))
+    }
+
+    private static func addColumnIfMissing(
+        table: String, column: String, definition: String, database: OpaquePointer?
+    ) throws {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, "PRAGMA table_info(\(table))", -1, &statement, nil) == SQLITE_OK else {
+            throw SearchIndexError.sqlite(errorMessage(database))
+        }
+        defer { sqlite3_finalize(statement) }
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if let name = sqlite3_column_text(statement, 1), String(cString: name) == column {
+                return
+            }
+        }
+        try execute("ALTER TABLE \(table) ADD COLUMN \(column) \(definition)", database: database)
     }
 
     private func upsert(_ item: IndexedItem) throws {
@@ -165,8 +205,9 @@ public actor SQLiteSearchIndex: SearchService, SearchIndexRemoving {
                 tags_json,
                 extracted_text,
                 ai_summary,
-                status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                status,
+                content_fingerprint
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
         )
         defer { sqlite3_finalize(statement) }
@@ -187,6 +228,7 @@ public actor SQLiteSearchIndex: SearchService, SearchIndexRemoving {
         try bind(item.extractedText, at: 14, in: statement)
         try bind(item.aiSummary, at: 15, in: statement)
         try bind(item.status.rawValue, at: 16, in: statement)
+        try bind(item.contentFingerprint, at: 17, in: statement)
 
         try stepDone(statement)
         try replaceFTSRecord(for: item)
@@ -273,7 +315,8 @@ public actor SQLiteSearchIndex: SearchService, SearchIndexRemoving {
                 tags_json,
                 extracted_text,
                 ai_summary,
-                status
+                status,
+                content_fingerprint
             FROM indexed_items
             WHERE id = ?
             """
@@ -309,7 +352,8 @@ public actor SQLiteSearchIndex: SearchService, SearchIndexRemoving {
             tags: try tags(from: try requiredString(statement, column: 12)),
             extractedText: optionalString(statement, column: 13),
             aiSummary: optionalString(statement, column: 14),
-            status: status
+            status: status,
+            contentFingerprint: optionalString(statement, column: 16)
         )
     }
 

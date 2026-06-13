@@ -1,0 +1,14 @@
+graph LR
+    intake-pipeline["Intake Pipeline\nDefaultColdStartScanner, DefaultDropIntakeHandler, DefaultOrganizationPipeline"]
+    descent-model["Descent / Unit Model\nFilesystemDescender.swift, UnitTextComposer.swift"]
+    extraction["Metadata + Text Extraction\nDefaultMetadataExtractionService.swift, FileTextExtracting.swift"]
+    semantic-layer["Semantic Layer\nTextEmbedder, TopicDiscovery, EmbeddingBackfillService, RetrievalService"]
+    knowledge-graph["Knowledge Graph\nKnowledgeGraphService, RelatednessService, RelatedContextService"]
+    rules-engine["Rules + Workflow\nDefaultWorkflowEngine, RuleDocuments, DefaultOperationPlanner"]
+
+    intake-pipeline -->|"recursive scans classify via"| descent-model
+    intake-pipeline -->|"enriches every item"| extraction
+    intake-pipeline -->|"embeds name + text.content"| semantic-layer
+    intake-pipeline -->|"upserts items/events/edges"| knowledge-graph
+    rules-engine -->|"routes organize-mode intake"| intake-pipeline
+    semantic-layer -->|"similar-item edges"| knowledge-graph

@@ -6,15 +6,29 @@ import NaturalLanguage
 public final class DefaultMetadataExtractionService: MetadataExtractionService, @unchecked Sendable {
     private let fileManager: FileManager
     private let maxTextBytes: Int
+    private let maxCharacters: Int
+    private let textExtractor: FileTextExtracting?
     private let textExtensions: Set<String>
+
+    /// Files read directly as UTF-8 (plain text + source code). Richer types
+    /// (PDF/doc/docx/image) go through the injected `textExtractor`.
+    public static let defaultTextExtensions: Set<String> = [
+        "txt", "md", "markdown", "csv", "tsv", "json", "yaml", "yml", "log", "toml", "xml", "ini",
+        "swift", "js", "ts", "tsx", "jsx", "py", "java", "c", "cpp", "cc", "h", "hpp", "rb", "go",
+        "rs", "kt", "m", "mm", "php", "lua", "r", "sh", "bash", "zsh", "sql", "css", "scss"
+    ]
 
     public init(
         fileManager: FileManager = .default,
-        maxTextBytes: Int = 128_000,
-        textExtensions: Set<String> = ["txt", "md", "markdown", "csv", "json", "yaml", "yml", "log"]
+        maxTextBytes: Int = 512_000,
+        maxCharacters: Int = 6000,
+        textExtractor: FileTextExtracting? = nil,
+        textExtensions: Set<String> = DefaultMetadataExtractionService.defaultTextExtensions
     ) {
         self.fileManager = fileManager
         self.maxTextBytes = maxTextBytes
+        self.maxCharacters = maxCharacters
+        self.textExtractor = textExtractor
         self.textExtensions = textExtensions
     }
 
@@ -29,32 +43,34 @@ public final class DefaultMetadataExtractionService: MetadataExtractionService, 
             return MetadataExtractionResult(metadata: metadata, warnings: warnings)
         }
 
-        guard isTextCandidate(item) else {
+        var text: String?
+        if isTextCandidate(item) {
+            // Plain text / source code: read UTF-8 directly (bounded).
+            if let data = try? Data(contentsOf: item.url, options: [.mappedIfSafe]) {
+                if data.count > maxTextBytes {
+                    warnings.append("Text extraction skipped because file is larger than \(maxTextBytes) bytes.")
+                } else if let utf8 = String(data: data, encoding: .utf8), !utf8.isEmpty {
+                    text = utf8
+                } else {
+                    warnings.append("Text extraction skipped because UTF-8 text was unavailable.")
+                }
+            } else {
+                warnings.append("Text extraction failed: could not read file.")
+            }
+        } else if let textExtractor {
+            // Rich types — PDF / doc / docx / image OCR — via the macOS extractor.
+            text = await textExtractor.extractText(
+                from: item.url, uti: item.uniformTypeIdentifier, maxCharacters: maxCharacters)
+            if text == nil { metadata["metadata.extraction.skipped"] = "unsupportedType" }
+        } else {
             metadata["metadata.extraction.skipped"] = "unsupportedType"
-            return MetadataExtractionResult(metadata: metadata, warnings: warnings)
         }
 
-        do {
-            let data = try Data(contentsOf: item.url, options: [.mappedIfSafe])
-            guard data.count <= maxTextBytes else {
-                warnings.append("Text extraction skipped because file is larger than \(maxTextBytes) bytes.")
-                metadata["metadata.extraction.warningCount"] = String(warnings.count)
-                return MetadataExtractionResult(metadata: metadata, warnings: warnings)
-            }
-            guard let text = String(data: data, encoding: .utf8), !text.isEmpty else {
-                warnings.append("Text extraction skipped because UTF-8 text was unavailable.")
-                metadata["metadata.extraction.warningCount"] = String(warnings.count)
-                return MetadataExtractionResult(metadata: metadata, warnings: warnings)
-            }
-
-            // Keep a bounded slice of the raw text so it can feed lexical search
-            // and embeddings (not just NLP-derived tokens).
-            metadata["text.content"] = String(text.prefix(4000))
+        if let text, !text.isEmpty {
+            // Bounded slice feeds lexical search AND embeddings (not just NLP tokens).
+            metadata["text.content"] = String(text.prefix(maxCharacters))
             metadata.merge(Self.naturalLanguageMetadata(from: text)) { _, new in new }
-        } catch {
-            warnings.append("Text extraction failed: \(error.localizedDescription)")
         }
-
         if !warnings.isEmpty {
             metadata["metadata.extraction.warningCount"] = String(warnings.count)
         }

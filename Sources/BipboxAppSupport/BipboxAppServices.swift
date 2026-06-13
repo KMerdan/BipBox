@@ -36,6 +36,10 @@ public final class BipboxAppServices {
     public let dropIntakeHandler: DropIntakeHandling
     public let vectorIndex: VectorIndex
     public let embedder: TextEmbedder
+    public let embeddingBackfill: EmbeddingBackfilling
+    /// True when the data dir predates the current appDataVersion — derived
+    /// data (tags, fingerprints, vectors) is brought current by a full rescan.
+    public let needsMigrationRescan: Bool
 
     public init(
         paths: BipboxRuntimePaths,
@@ -68,7 +72,9 @@ public final class BipboxAppServices {
         intakeService: IntakeService,
         dropIntakeHandler: DropIntakeHandling,
         vectorIndex: VectorIndex,
-        embedder: TextEmbedder
+        embedder: TextEmbedder,
+        embeddingBackfill: EmbeddingBackfilling,
+        needsMigrationRescan: Bool = false
     ) {
         self.paths = paths
         self.workflow = workflow
@@ -101,17 +107,35 @@ public final class BipboxAppServices {
         self.dropIntakeHandler = dropIntakeHandler
         self.vectorIndex = vectorIndex
         self.embedder = embedder
+        self.embeddingBackfill = embeddingBackfill
+        self.needsMigrationRescan = needsMigrationRescan
+    }
+
+    /// Re-walk every completed watched-folder source. Cheap after the
+    /// fingerprint engine (unchanged items are skipped), so the app runs this
+    /// on every launch to reconcile changes made while it was closed — it also
+    /// doubles as the derived-data migration path (`needsMigrationRescan`).
+    public func rescanAllSources() async {
+        guard let sources = try? await sourceStore.sources() else { return }
+        for source in sources where source.kind == .watchedFolder && source.indexState == .completed {
+            _ = try? await sourceLifecycleCoordinator.scanSource(id: source.id)
+        }
     }
 
     public static func makeDefault(
         paths: BipboxRuntimePaths? = nil,
         workflow: Workflow? = nil,
+        embedderFactory: (@Sendable (BipboxRuntimePaths) -> TextEmbedder)? = nil,
         fileManager: FileManager = .default
     ) throws -> BipboxAppServices {
         let runtimePaths = try paths ?? BipboxRuntimePaths(
             baseDirectoryURL: BipboxRuntimePaths.defaultBaseDirectory(fileManager: fileManager)
         )
         try runtimePaths.createRequiredDirectories(fileManager: fileManager)
+
+        // Data-dir-wide version stamp (above per-store SQLite user_versions).
+        let dataMeta = DataDirectoryMetaStore.reconcile(
+            dataDirectoryURL: runtimePaths.dataDirectoryURL, fileManager: fileManager)
 
         let inspector = FileSystemItemInspector(fileManager: fileManager)
         let activityLog = try JSONLinesActivityLog(directoryURL: runtimePaths.activityLogDirectoryURL)
@@ -126,7 +150,10 @@ public final class BipboxAppServices {
         // Semantic layer: on-device embeddings + SQLite vector index. Gated by
         // BIPBOX_SEMANTIC (default on); set to "0" to A/B against lexical-only.
         let vectorIndex = try SQLiteVectorIndex(directoryURL: runtimePaths.vectorIndexDirectoryURL)
-        let embedder = NLEmbeddingTextEmbedder()
+        // App injects the MLX (Qwen3) embedder; harness/tests get the zero-download
+        // on-device NL embedder by default. `embed` returns nil until provisioned,
+        // so retrieval degrades to lexical until the model is downloaded.
+        let embedder = embedderFactory?(runtimePaths) ?? NLEmbeddingTextEmbedder()
         let semanticEnabled = ProcessInfo.processInfo.environment["BIPBOX_SEMANTIC"] != "0"
         let semanticWeight = semanticEnabled ? 0.6 : 0
         let retrievalService = DefaultRetrievalService(
@@ -146,7 +173,8 @@ public final class BipboxAppServices {
             graphService: knowledgeGraphService,
             relatednessService: relatednessService
         )
-        let metadataExtractionService = DefaultMetadataExtractionService(fileManager: fileManager)
+        let metadataExtractionService = DefaultMetadataExtractionService(
+            fileManager: fileManager, textExtractor: MacContentExtractor())
         let ruleStore = try JSONRuleDocumentStore(directoryURL: runtimePaths.rulesDirectoryURL)
         let permissionStore = try SecurityScopedBookmarkPermissionStore(
             directoryURL: runtimePaths.permissionsDirectoryURL
@@ -213,6 +241,14 @@ public final class BipboxAppServices {
             scanner: coldStartScanner,
             watcherReloader: watchFolderAutomation
         )
+        // Arrivals -> debounced incremental rescan of the source, so new files
+        // get unit-model classification without re-implementing descent in the
+        // watcher. (Async actor hop; watchers aren't scanning yet at this point.)
+        Task {
+            await watchFolderAutomation.setRescanHandler { sourceID in
+                _ = try? await sourceLifecycleCoordinator.scanSource(id: sourceID)
+            }
+        }
         try Self.registerBuiltInTools(
             toolRegistry: toolRegistry,
             ruleStore: ruleStore,
@@ -226,6 +262,9 @@ public final class BipboxAppServices {
             sourceLifecycleCoordinator: sourceLifecycleCoordinator,
             activityLog: activityLog
         )
+
+        let embeddingBackfill = DefaultEmbeddingBackfillService(
+            searchService: searchService, embedder: embedder, vectorIndex: vectorIndex)
 
         return BipboxAppServices(
             paths: runtimePaths,
@@ -258,7 +297,9 @@ public final class BipboxAppServices {
             intakeService: intakeService,
             dropIntakeHandler: dropIntakeHandler,
             vectorIndex: vectorIndex,
-            embedder: embedder
+            embedder: embedder,
+            embeddingBackfill: embeddingBackfill,
+            needsMigrationRescan: dataMeta.needsFullRescan
         )
     }
 

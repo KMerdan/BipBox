@@ -28,9 +28,12 @@ if [ "${1:-}" = "generate" ]; then
 fi
 
 echo "==> Running UI tests (xcodebuild)"
+# -skipMacroValidation: the MLX embedder (BipboxMLX) uses Swift macros, which
+# Xcode otherwise blocks pending interactive "Trust & Enable" approval.
 xcodebuild test \
     -project Bipbox.xcodeproj \
     -scheme Bipbox \
     -destination 'platform=macOS' \
     -only-testing:BipboxUITests \
-    -derivedDataPath .build/xcode
+    -derivedDataPath .build/xcode \
+    -skipMacroValidation

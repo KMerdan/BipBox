@@ -129,6 +129,10 @@ public struct WorkspaceSnapshot: Codable, Sendable, Equatable {
     public var pendingCount: Int
     public var ruleCount: Int
     public var toast: String?
+    /// The sidebar indexing status line ("Indexing Downloads · 1,240 of 7,600 ·
+    /// ~4 min left"), nil when idle. Lets the control API / UI tests observe
+    /// long-running scan & embedding progress.
+    public var indexing: String?
     public var items: [ItemSummary]
     public var sources: [SourceSummary]
     public var rules: [RuleSummary]
@@ -279,6 +283,7 @@ extension WorkspaceModel {
             pendingCount: pendingCount,
             ruleCount: rules.ruleDocuments.count,
             toast: toast,
+            indexing: indexingActivity?.statusLine(),
             items: library.results.prefix(100).map {
                 .init(id: $0.id.uuidString, name: $0.displayName, status: $0.status.rawValue,
                       path: $0.currentPath, originalPath: $0.originalPath)

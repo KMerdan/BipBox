@@ -1,0 +1,1 @@
+Items indexed by pre-unit-model scans carry no unit tags and are treated as loose seeds — existing libraries need a rescan (fresh data dir or re-add sources) for correct topic grouping. Watcher arrivals also bypass descent classification until rescanned.

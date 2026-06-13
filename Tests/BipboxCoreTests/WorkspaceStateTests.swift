@@ -103,17 +103,35 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertEqual(clusters.first(where: { $0.name == "Documents" })?.itemIDs.count, 2)
     }
 
-    func testClusterLinksConnectCategoriesSharingAFolder() async {
-        // pdf + png live in the SAME folder → Documents and Images should link.
-        let items = [
-            indexedItemFixture(path: "/U/Project/report.pdf", name: "report.pdf", kind: .file),
-            indexedItemFixture(path: "/U/Project/diagram.png", name: "diagram.png", kind: .file),
-        ]
-        let model = await makeModel(items: items)
-        model.lens = .type
-        await model.recomputeClusters()
-        let links = model.clusterLinks()
-        XCTAssertFalse(links.isEmpty, "Categories sharing a folder must produce an edge")
+    // MARK: - indexing status line
+
+    func testReportIndexingPreservesStartTimeAcrossUpdatesThenClears() {
+        let model = makeModel()
+        XCTAssertNil(model.indexingActivity)
+
+        model.reportIndexing(kind: .scanning(sourceName: "Downloads"), completed: 10, total: 100)
+        let started = model.indexingActivity?.startedAt
+        XCTAssertNotNil(started)
+        XCTAssertEqual(model.indexingActivity?.completed, 10)
+
+        // A later update of the SAME work keeps the original start time (so the
+        // ETA is computed over the whole run, not the latest slice).
+        model.reportIndexing(kind: .scanning(sourceName: "Downloads"), completed: 40, total: 100)
+        XCTAssertEqual(model.indexingActivity?.completed, 40)
+        XCTAssertEqual(model.indexingActivity?.startedAt, started)
+
+        // Switching to a different kind of work resets the clock.
+        model.reportIndexing(kind: .embedding, completed: 1, total: 50)
+        XCTAssertEqual(model.indexingActivity?.kind, .embedding)
+        XCTAssertNotEqual(model.indexingActivity?.startedAt, started)
+
+        // Completion (completed >= total) and an explicit nil both clear it.
+        model.reportIndexing(kind: .embedding, completed: 50, total: 50)
+        XCTAssertNil(model.indexingActivity, "reaching the total clears the line")
+        model.reportIndexing(kind: .scanning(sourceName: "Docs"), completed: 5, total: 9)
+        XCTAssertNotNil(model.indexingActivity)
+        model.reportIndexing(kind: nil)
+        XCTAssertNil(model.indexingActivity)
     }
 }
 

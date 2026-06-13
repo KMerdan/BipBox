@@ -1,0 +1,1 @@
+Qwen3-VL-Embedding-2B multimodal embedder (image lane) is in the backlog. Classify watcher-arrived files with FilesystemDescender semantics instead of treating them as loose. Consider cosine~0.97 near-dup collapse at embed time (Stage C of the experiment, not yet ported).

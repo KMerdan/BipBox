@@ -1,0 +1,1 @@
+The app is intentionally fully usable in needsDownload: indexing, FTS search, Type/Source/Time lenses all work; only embeddings/Smart lens wait. UI tests exercise the states via BIPBOX_FAKE_PROVISIONING=needsDownload|ready with a scripted embedder (ProvisioningUITests).

@@ -2,6 +2,7 @@ import AppKit
 import BipboxAppSupport
 import BipboxCore
 import BipboxMenuBarUI
+import BipboxMLX
 import BipboxWorkspaceUI
 import SwiftUI
 
@@ -66,6 +67,8 @@ private final class BipboxApplicationDelegate: NSObject, NSApplicationDelegate {
         }
         menuBarController = MenuBarStatusItemController(viewModel: viewModel)
         showWorkspaceWindow()
+        applicationModel.provisioning.start()   // load cached model, or surface the one-time download
+        applicationModel.rescanSourcesOnLaunch() // reconcile offline changes (cheap: fingerprint-skipping)
         startControlAPIIfRequested()
         seedFolderIfRequested()
     }
@@ -115,7 +118,11 @@ private final class BipboxApplicationDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        let rootView = WorkspaceRootView(model: applicationModel.workspaceModel)
+        let rootView = RootContainerView(
+            coordinator: applicationModel.provisioning,
+            model: applicationModel.workspaceModel,
+            startupError: applicationModel.startupError
+        )
         let hostingView = NSHostingView(rootView: rootView)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1100, height: 720),
@@ -247,6 +254,7 @@ private final class BipboxApplicationModel: ObservableObject {
     let services: BipboxAppServices?
     let workspaceViewModels: WorkspaceViewModels
     let workspaceModel: WorkspaceModel
+    let provisioning: ModelProvisioningCoordinator
     private let searchResultActions: BipboxSearchResultActions
     private let watchFolderRefresher: BipboxWatchFolderRefresher?
     @Published private(set) var startupError: String?
@@ -256,8 +264,13 @@ private final class BipboxApplicationModel: ObservableObject {
         self.searchResultActions = searchResultActions
 
         do {
-            let services = try BipboxAppServices.makeDefault(paths: Self.overrideRuntimePaths())
+            try Self.forceStartupErrorIfRequested()
+            let services = try BipboxAppServices.makeDefault(
+                paths: Self.overrideRuntimePaths(),
+                embedderFactory: Self.makeEmbedderFactory()
+            )
             self.services = services
+            self.provisioning = ModelProvisioningCoordinator(embedder: services.embedder)
             let watchFolderRefresher = BipboxWatchFolderRefresher(automation: services.watchFolderAutomation)
             self.watchFolderRefresher = watchFolderRefresher
             workspaceViewModels = WorkspaceViewModels(
@@ -324,18 +337,63 @@ private final class BipboxApplicationModel: ObservableObject {
             }
             workspaceModel = model
             startupError = nil
+            // Once the model is provisioned, backfill embeddings + recompute topics.
+            provisioning.onBecameReady = { [weak self] in await self?.backfillAndRecompute() }
             Task {
                 try? await services.watchFolderAutomation.reloadWatchedFolders()
                 await services.watchFolderAutomation.startScanning()
             }
+            // Long-running scans -> sidebar status line ("Indexing <source> · n of m · ETA").
+            // Throttled: a per-item MainActor publish for a 7k-file scan is wasted churn.
+            Task { [weak self] in
+                await services.sourceLifecycleCoordinator.setScanProgress { sourceName, progress in
+                    let shouldPublish = progress.phase != .scanning || progress.scannedCount % 20 == 0
+                    guard shouldPublish else { return }
+                    await MainActor.run {
+                        guard let self else { return }
+                        switch progress.phase {
+                        case .completed:
+                            self.workspaceModel.reportIndexing(kind: nil)
+                        default:
+                            guard let total = progress.totalCount, total > 0 else { return }
+                            self.workspaceModel.reportIndexing(
+                                kind: .scanning(sourceName: sourceName),
+                                completed: progress.scannedCount, total: total)
+                        }
+                    }
+                }
+            }
         } catch {
             services = nil
             watchFolderRefresher = nil
+            provisioning = ModelProvisioningCoordinator(embedder: nil)
             let fixtures = WorkspaceViewModels()
             workspaceViewModels = fixtures
             workspaceModel = WorkspaceModel(fixtures)
             startupError = error.localizedDescription
         }
+    }
+
+    /// The app injects the MLX (Qwen3) embedder. DEBUG UI tests can substitute a
+    /// scripted provisioner via `BIPBOX_FAKE_PROVISIONING=needsDownload|ready` so the
+    /// banner flow is testable without a real ~600 MB download.
+    private static func makeEmbedderFactory() -> (@Sendable (BipboxRuntimePaths) -> TextEmbedder) {
+        #if DEBUG
+        if let mode = ProcessInfo.processInfo.environment["BIPBOX_FAKE_PROVISIONING"], !mode.isEmpty {
+            return { _ in ScriptedProvisioningEmbedder(mode: mode) }
+        }
+        #endif
+        return { paths in MLXTextEmbedder(markerURL: paths.embedderMarkerURL) }
+    }
+
+    /// DEBUG: force the startup-error path so the error banner is testable.
+    private static func forceStartupErrorIfRequested() throws {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["BIPBOX_FORCE_STARTUP_ERROR"] == "1" {
+            throw NSError(domain: "Bipbox", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "forced startup error (debug)"])
+        }
+        #endif
     }
 
     /// DEBUG: route the data store to an isolated directory for UI/automation tests.
@@ -346,6 +404,35 @@ private final class BipboxApplicationModel: ObservableObject {
         }
         #endif
         return nil
+    }
+
+    /// Once the embedding model is provisioned: embed any indexed items that lack a
+    /// vector for it, then recompute the topic graph so it actually populates.
+    func backfillAndRecompute() async {
+        guard let services else { return }
+        _ = await services.embeddingBackfill.backfill(limit: 10_000) { [weak self] processed, total in
+            // Embedding is slow (local model), so every 10th update is plenty.
+            guard processed % 10 == 0 || processed == total else { return }
+            await MainActor.run {
+                self?.workspaceModel.reportIndexing(kind: .embedding, completed: processed, total: total)
+            }
+        }
+        workspaceModel.reportIndexing(kind: nil)
+        await workspaceModel.recomputeClusters()
+    }
+
+    /// Every launch: incremental rescan of all completed sources. Unchanged items
+    /// are fingerprint-skipped, so this only pays for files that changed while the
+    /// app was closed — and it upgrades pre-unit-model libraries in place
+    /// (services.needsMigrationRescan). Backfill afterwards embeds anything new.
+    func rescanSourcesOnLaunch() {
+        guard let services else { return }
+        // Plain Task: the awaits suspend rather than block the main thread; the
+        // heavy work happens inside the scanner/store actors.
+        Task(priority: .utility) { [weak self] in
+            await services.rescanAllSources()
+            await self?.backfillAndRecompute()
+        }
     }
 
     /// DEBUG: seed a watched folder on launch so UI tests have deterministic data.
@@ -381,6 +468,160 @@ private extension ItemKind {
         }
     }
 }
+
+/// Drives the one-time embedding-model download and exposes its state to the UI.
+/// On launch: if the model is already cached it loads silently; otherwise it
+/// surfaces `.needsDownload` so the user opts in — never a silent download.
+@MainActor
+final class ModelProvisioningCoordinator: ObservableObject {
+    @Published private(set) var status: EmbedderModelStatus = .ready
+    private let provisioner: EmbedderProvisioning?
+    /// Runs once the model reaches `.ready` (e.g. backfill embeddings + recompute topics).
+    var onBecameReady: (() async -> Void)?
+
+    init(embedder: TextEmbedder?) {
+        self.provisioner = embedder as? EmbedderProvisioning
+    }
+
+    func start() {
+        guard let provisioner else { status = .ready; return }
+        Task {
+            let current = await provisioner.provisioningStatus()
+            if case .ready = current {
+                await load(provisioner)        // cached → load into memory, no download
+            } else {
+                status = current               // .needsDownload → banner waits for the user
+            }
+        }
+    }
+
+    func download() {
+        guard let provisioner else { return }
+        Task { await load(provisioner) }
+    }
+
+    private func load(_ provisioner: EmbedderProvisioning) async {
+        status = .downloading(0)
+        let final = await provisioner.prepare { [weak self] fraction in
+            Task { @MainActor in self?.status = .downloading(fraction) }
+        }
+        status = final
+        if case .ready = final { await onBecameReady?() }
+    }
+}
+
+/// First-run banner above the workspace. Hidden once the model is ready.
+private struct ModelProvisioningBanner: View {
+    @ObservedObject var coordinator: ModelProvisioningCoordinator
+
+    var body: some View {
+        switch coordinator.status {
+        case .ready:
+            EmptyView()
+        case .needsDownload:
+            banner(color: .yellow, icon: "sparkles") {
+                Text("Semantic search uses a one-time on-device model (~600 MB). It runs locally — nothing leaves your Mac.")
+                Spacer(minLength: 12)
+                Button("Download") { coordinator.download() }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("provisioning.download")
+            }
+        case .downloading(let fraction):
+            banner(color: .blue, icon: "arrow.down.circle") {
+                Text("Preparing semantic search…")
+                    .accessibilityIdentifier("provisioning.downloading")
+                ProgressView(value: fraction).frame(width: 160)
+                Text("\(Int(fraction * 100))%").monospacedDigit().foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+        case .failed(let message):
+            banner(color: .red, icon: "exclamationmark.triangle") {
+                Text("Model download failed. Search is using keywords only.")
+                    .help(message)
+                Spacer(minLength: 12)
+                Button("Retry") { coordinator.download() }
+                    .accessibilityIdentifier("provisioning.retry")
+            }
+        }
+    }
+
+    // NB: no accessibilityIdentifier on this container — identifying a container
+    // collapses its a11y subtree and hides the child Button from XCUITest. Leaf
+    // elements (the Download/Retry buttons, the "Preparing…" text) carry the IDs.
+    @ViewBuilder
+    private func banner(color: Color, icon: String, @ViewBuilder _ content: () -> some View) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon).foregroundStyle(color)
+            content()
+        }
+        .font(.callout)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(color.opacity(0.12))
+        .overlay(Rectangle().frame(height: 1).foregroundStyle(color.opacity(0.25)), alignment: .bottom)
+    }
+}
+
+/// Workspace with the provisioning + startup-error banners stacked on top.
+private struct RootContainerView: View {
+    @ObservedObject var coordinator: ModelProvisioningCoordinator
+    let model: WorkspaceModel
+    let startupError: String?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if let startupError {
+                HStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.octagon").foregroundStyle(.red)
+                    Text("Bipbox couldn't start its services: \(startupError)")
+                    Spacer(minLength: 0)
+                }
+                .font(.callout)
+                .padding(.horizontal, 14).padding(.vertical, 9)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.red.opacity(0.12))
+                .overlay(Rectangle().frame(height: 1).foregroundStyle(.red.opacity(0.25)), alignment: .bottom)
+                .accessibilityIdentifier("startup.error")
+            }
+            ModelProvisioningBanner(coordinator: coordinator)
+            WorkspaceRootView(model: model)
+        }
+    }
+}
+
+#if DEBUG
+/// DEBUG-only scripted embedder for UI tests of the provisioning banner — no real
+/// download. `mode == "ready"` starts provisioned; `"needsDownload"` shows the banner
+/// and `download()` plays a brief visible progress sequence before becoming ready.
+actor ScriptedProvisioningEmbedder: TextEmbedder, EmbedderProvisioning {
+    let modelID = "debug-scripted-embed"
+    private var ready: Bool
+
+    init(mode: String) { self.ready = (mode == "ready") }
+
+    func provisioningStatus() async -> EmbedderModelStatus { ready ? .ready : .needsDownload }
+
+    @discardableResult
+    func prepare(progress: @Sendable @escaping (Double) -> Void) async -> EmbedderModelStatus {
+        if ready { progress(1); return .ready }
+        for step in stride(from: 0.0, through: 1.0, by: 0.2) {
+            progress(step)
+            try? await Task.sleep(nanoseconds: 250_000_000)   // visible "downloading" for the UI test
+        }
+        ready = true
+        return .ready
+    }
+
+    func embed(_ text: String) async -> [Float]? {
+        guard ready else { return nil }
+        var hash = 5381
+        for byte in text.utf8 { hash = ((hash << 5) &+ hash) &+ Int(byte) }
+        let x = Float(abs(hash % 1000)) / 1000
+        return NLEmbeddingTextEmbedder.unitNormalized([x, 1 - x, Float((hash >> 3) % 7) / 7])
+    }
+}
+#endif
 
 @main
 struct BipboxApplication: App {

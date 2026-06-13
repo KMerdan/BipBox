@@ -27,7 +27,26 @@ public actor SQLiteVectorIndex: VectorIndex {
         }
     }
 
+    /// 1: initial versioned schema. Pre-versioning (user_version 0) databases
+    /// have the identical table shape, so they are adopted in place — vectors
+    /// are derived data; if a future version changes the shape, the policy is
+    /// drop + rebuild via backfill, not hand-written migration.
+    public static let schemaVersion = 1
+
     private static func migrate(_ database: OpaquePointer?) throws {
+        var versionStatement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, "PRAGMA user_version", -1, &versionStatement, nil) == SQLITE_OK,
+              sqlite3_step(versionStatement) == SQLITE_ROW else {
+            sqlite3_finalize(versionStatement)
+            throw VectorIndexError.backendUnavailable(errorMessage(database))
+        }
+        let onDiskVersion = Int(sqlite3_column_int(versionStatement, 0))
+        sqlite3_finalize(versionStatement)
+        guard onDiskVersion <= schemaVersion else {
+            throw VectorIndexError.backendUnavailable(
+                "Vector index schema v\(onDiskVersion) is newer than this app supports (v\(schemaVersion)). Update Bipbox.")
+        }
+
         let sql = """
         CREATE TABLE IF NOT EXISTS vectors (
             item_id TEXT NOT NULL,
@@ -37,6 +56,7 @@ public actor SQLiteVectorIndex: VectorIndex {
             PRIMARY KEY (item_id, model_id)
         );
         CREATE INDEX IF NOT EXISTS vectors_model ON vectors(model_id);
+        PRAGMA user_version = \(schemaVersion);
         """
         guard sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK else {
             throw VectorIndexError.backendUnavailable(errorMessage(database))

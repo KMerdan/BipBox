@@ -1,0 +1,1 @@
+Throughput finding (measured): client-side threading does not speed up a single local GPU embedder — levers are incremental indexing and a background queue, not fan-out. The kNN inside TopicDiscovery is parallelized (concurrentPerform) and runs off the main actor; 7.6k x 1024 vectors cluster in ~3s release.

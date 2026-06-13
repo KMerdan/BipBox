@@ -15,8 +15,27 @@ public protocol TextEmbedder: Sendable {
     /// Stable id of the embedding model (vectors are namespaced by this).
     var modelID: String { get }
     /// Embed text into a UNIT-NORMALIZED vector (so dot product == cosine).
-    /// Returns nil when the text can't be embedded (empty / model unavailable).
+    /// Returns nil when the text can't be embedded (empty / model not yet provisioned).
     func embed(_ text: String) async -> [Float]?
+}
+
+/// Provisioning state of an embedder's model. The download is EXPLICIT (never
+/// silent) so first run is never a surprise; until `.ready`, `embed` returns nil
+/// and retrieval degrades to lexical.
+public enum EmbedderModelStatus: Sendable, Equatable {
+    case ready                   // model present & usable now
+    case needsDownload           // a one-time model download is required
+    case downloading(Double)     // fraction 0...1
+    case failed(String)
+}
+
+/// An embedder whose model may require a visible, user-initiated download.
+public protocol EmbedderProvisioning: Sendable {
+    /// Current readiness — does NOT trigger any download.
+    func provisioningStatus() async -> EmbedderModelStatus
+    /// Download + load the model, reporting 0...1 progress. Idempotent; returns the final status.
+    @discardableResult
+    func prepare(progress: @Sendable @escaping (Double) -> Void) async -> EmbedderModelStatus
 }
 
 /// On-device embedder backed by Apple's `NLEmbedding` (private, free, no network).
@@ -62,5 +81,18 @@ public final class NLEmbeddingTextEmbedder: TextEmbedder, @unchecked Sendable {
         let norm = (v.reduce(Float(0)) { $0 + $1 * $1 }).squareRoot()
         guard norm > 0 else { return nil }
         return v.map { $0 / norm }
+    }
+}
+
+/// The on-device NL embedder ships with the OS — nothing to download.
+extension NLEmbeddingTextEmbedder: EmbedderProvisioning {
+    public func provisioningStatus() async -> EmbedderModelStatus {
+        isAvailable ? .ready : .failed("on-device NL embedding model unavailable")
+    }
+
+    @discardableResult
+    public func prepare(progress: @Sendable @escaping (Double) -> Void) async -> EmbedderModelStatus {
+        progress(1)
+        return await provisioningStatus()
     }
 }

@@ -6,12 +6,13 @@
 // confirms; the exhaustive matrix lives in Tests/BipboxCoreTests/PrincipleAcceptanceTests.
 import XCTest
 
+@MainActor
 final class PrincipleUITests: XCTestCase {
     private var dataDir: URL!
     private var seedDir: URL!
     private let port = Int.random(in: 8200...8999)
 
-    override func setUpWithError() throws {
+    override func setUp() async throws {
         continueAfterFailure = false
         let fm = FileManager.default
         dataDir = fm.temporaryDirectory.appendingPathComponent("bipbox-puit-data-\(UUID().uuidString)", isDirectory: true)
@@ -23,7 +24,7 @@ final class PrincipleUITests: XCTestCase {
         try "code".write(to: seedDir.appendingPathComponent("nestedfolder/buried.swift"), atomically: true, encoding: .utf8)
     }
 
-    override func tearDownWithError() throws {
+    override func tearDown() async throws {
         try? FileManager.default.removeItem(at: dataDir)
         try? FileManager.default.removeItem(at: seedDir)
     }
@@ -196,7 +197,7 @@ final class PrincipleUITests: XCTestCase {
 
     private func sync(_ request: URLRequest) throws -> Data {
         let sem = DispatchSemaphore(value: 0)
-        var result: Result<Data, Error>!
+        nonisolated(unsafe) var result: Result<Data, Error>!  // guarded by the semaphore
         URLSession.shared.dataTask(with: request) { data, _, error in
             if let error { result = .failure(error) } else { result = .success(data ?? Data()) }
             sem.signal()

@@ -1,0 +1,32 @@
+graph TD
+    bipbox-app-target["BipboxApp (GUI)\nPackage.swift target"]
+    harness-cli["bipbox-harness CLI\nBipboxHarnessCLI"]
+    harness-lib["BipboxHarness"]
+    workspace-ui-target["BipboxWorkspaceUI"]
+    menubar-ui["BipboxMenuBarUI"]
+    app-support-target["BipboxAppSupport"]
+    mlx-target["BipboxMLX\n(mlx-swift-lm, swift-huggingface, swift-transformers)"]
+    ai-target["BipboxAI"]
+    persistence-target["BipboxPersistence\n(SQLite)"]
+    adapters-target["BipboxMacOSAdapters\n(PDFKit, Vision, AppKit)"]
+    core-target["BipboxCore\n(Foundation only)"]
+
+    bipbox-app-target -->|"links"| workspace-ui-target
+    bipbox-app-target -->|"links"| menubar-ui
+    bipbox-app-target -->|"links (ONLY consumer)"| mlx-target
+    bipbox-app-target -->|"links"| app-support-target
+    harness-cli -->|"links"| harness-lib
+    harness-lib -->|"links"| app-support-target
+    harness-lib -->|"links"| workspace-ui-target
+    workspace-ui-target -->|"links"| core-target
+    app-support-target -->|"links"| core-target
+    app-support-target -->|"links"| persistence-target
+    app-support-target -->|"links"| adapters-target
+    app-support-target -->|"links"| ai-target
+    persistence-target -->|"links"| core-target
+    adapters-target -->|"links"| core-target
+    ai-target -->|"links"| core-target
+    mlx-target -->|"links"| core-target
+
+    classDef external fill:#585b70,stroke:#585b70,color:#cdd6f4
+    class mlx-target external

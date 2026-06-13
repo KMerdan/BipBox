@@ -1,0 +1,1 @@
+The seeds-vs-assign split is the load-bearing decision: per-file discovery over the real corpus (7.6k vectors) shattered into 228 micro-topics; the same code over 456 aggregate seeds with everyone else assigned reproduces the validated 30 topics exactly. Validated against the bge-m3 Python experiment on the user's actual Downloads + localGit.

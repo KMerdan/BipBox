@@ -1,0 +1,16 @@
+created: 2026-06-11T07:59:03.232Z
+updated: 2026-06-11T07:59:46.668Z
+update_count: 7
+last_field: note
+git_commit: "7959126"
+git_branch: main
+children:
+  - ai-gateway
+  - app-support
+  - bipbox-app
+  - core-domain
+  - harness
+  - macos-adapters
+  - mlx-embedder
+  - persistence
+  - workspace-ui

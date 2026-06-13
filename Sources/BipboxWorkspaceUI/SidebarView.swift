@@ -47,8 +47,16 @@ struct SidebarView: View {
 
             Divider().overlay(BB.hair)
             HStack(spacing: 9) {
-                Circle().fill(BB.good).frame(width: 7, height: 7)
-                Text("Assistant ready · local").font(.system(size: 12)).foregroundStyle(BB.ink2)
+                if let activity = model.indexingActivity {
+                    Circle().fill(BB.accent).frame(width: 7, height: 7)
+                    Text(activity.statusLine())
+                        .font(.system(size: 12)).foregroundStyle(BB.ink2)
+                        .lineLimit(1)
+                        .accessibilityIdentifier("indexing.status")
+                } else {
+                    Circle().fill(BB.good).frame(width: 7, height: 7)
+                    Text("Assistant ready · local").font(.system(size: 12)).foregroundStyle(BB.ink2)
+                }
                 Spacer()
                 Button(action: onOpenSettings) {
                     Image(systemName: "gearshape").font(.system(size: 14)).foregroundStyle(BB.ink3)

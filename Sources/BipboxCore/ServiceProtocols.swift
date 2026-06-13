@@ -198,6 +198,15 @@ public protocol SourceLifecycleCoordinating: Sendable {
     func pauseSource(id: UUID) async throws -> SourceLifecycleResult
     @discardableResult
     func resumeSource(id: UUID) async throws -> SourceLifecycleResult
+    /// Observe per-item scan progress for every scan this coordinator runs
+    /// (initial scans, rescans, watcher-triggered). Called with the source's
+    /// display name + the scanner's progress.
+    func setScanProgress(_ handler: (@Sendable (String, ColdStartScanProgress) async -> Void)?) async
+}
+
+public extension SourceLifecycleCoordinating {
+    /// Default: scan progress is not observed.
+    func setScanProgress(_ handler: (@Sendable (String, ColdStartScanProgress) async -> Void)?) async {}
 }
 
 public protocol AIOrchestrator: Sendable {

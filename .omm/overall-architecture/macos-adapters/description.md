@@ -1,0 +1,1 @@
+Sources/BipboxMacOSAdapters/ — the OS-facing port implementations: MacContentExtractor (PDFKit text, NSAttributedString importers for doc/docx/rtf/html/odt, Vision OCR for images), FileSystemOperationExecutor (move/copy/trash), PollingFolderWatcher (new-arrival detection for watched folders), SecurityScopedBookmarkPermissionStore (persistent folder access across launches).

@@ -1,0 +1,27 @@
+graph LR
+    watched-folder["Watched Folder / Drop\n~/Downloads, ~/localGit"]
+    descender["FilesystemDescender\nSources/BipboxCore/FilesystemDescender.swift"]
+    scanner["Cold-Start Scanner\nSources/BipboxCore/DefaultColdStartScanner.swift"]
+    extraction["Text Extraction\nDefaultMetadataExtractionService + MacContentExtractor"]
+    search-index["FTS5 Search Index\nSources/BipboxPersistence/SQLiteSearchIndex.swift"]
+    vector-index["Vector Index\nSources/BipboxPersistence/SQLiteVectorIndex.swift"]
+    embedder["Qwen3 Embedder (MLX)\nSources/BipboxMLX/MLXTextEmbedder.swift"]
+    backfill["Embedding Backfill\nSources/BipboxCore/EmbeddingBackfillService.swift"]
+    topic-discovery["Topic Discovery\nSources/BipboxCore/TopicDiscovery.swift"]
+    connections-graph["Connections Graph\nSources/BipboxWorkspaceUI/ConnectionsView.swift"]
+
+    watched-folder -->|"granted root, recursive scan"| scanner
+    scanner -->|"classify dirs: project / collection / loose + dedup"| descender
+    scanner -->|"per item: read text content"| extraction
+    extraction -->|"text.content -> name+text rows"| search-index
+    scanner -->|"embed name + unit/file text (skip dups)"| embedder
+    embedder -->|"1024-dim vectors per (item, model)"| vector-index
+    backfill -->|"after provisioning: embed items missing vectors"| embedder
+    vector-index -->|"seeds (aggregates+samples) vs assign vectors"| topic-discovery
+    topic-discovery -->|"topics, soft membership, centroid edges"| connections-graph
+    search-index -->|"lexical hits blend with vector hits"| connections-graph
+
+    classDef store fill:#a6e3a1,stroke:#a6e3a1,color:#1e1e2e
+    classDef entry fill:#89b4fa,stroke:#89b4fa,color:#1e1e2e
+    class search-index,vector-index store
+    class watched-folder entry

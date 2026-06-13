@@ -1,0 +1,1 @@
+The semantic layer (descender -> unit text -> embeddings -> Louvain topic discovery) was validated first as a Python experiment on the real disk (scripts/experiments/topic-graph/) and then ported 1:1; the Swift port reproduces the reference output exactly (30 topics, identical member counts) via scripts/experiments/swift-parity/.

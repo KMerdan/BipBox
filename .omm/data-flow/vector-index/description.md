@@ -1,0 +1,1 @@
+SQLiteVectorIndex — VectorRecord(itemID, modelID, vector) storage with nearest(query) brute-force cosine and vectors(modelID) bulk fetch for clustering. Model-id keying means swapping embedders never mixes spaces; backfill fills the new space lazily.

@@ -5,32 +5,37 @@
 // graph.center).
 import XCTest
 
+@MainActor
 final class ConnectionsGraphUITests: XCTestCase {
     private var dataDir: URL!
     private var seedDir: URL!
     // Unique per test instance — avoids a still-releasing prior app shadowing the next.
     private let port = Int.random(in: 8200...8999)
 
-    override func setUpWithError() throws {
+    override func setUp() async throws {
         continueAfterFailure = false
         let fm = FileManager.default
         dataDir = fm.temporaryDirectory.appendingPathComponent("bipbox-cguit-data-\(UUID().uuidString)", isDirectory: true)
         seedDir = fm.temporaryDirectory.appendingPathComponent("bipbox-cguit-seed-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: seedDir.appendingPathComponent("sub"), withIntermediateDirectories: true)
         try fm.createDirectory(at: dataDir, withIntermediateDirectories: true)
-        // A mix of categories so Overview has several clusters that share a folder.
+        // A mix of categories so the Type lens yields several clusters.
         try "annual report".write(to: seedDir.appendingPathComponent("report.pdf"), atomically: true, encoding: .utf8)
         try "spec".write(to: seedDir.appendingPathComponent("spec.pdf"), atomically: true, encoding: .utf8)
         try "img".write(to: seedDir.appendingPathComponent("diagram.png"), atomically: true, encoding: .utf8)
         try "code".write(to: seedDir.appendingPathComponent("sub/main.swift"), atomically: true, encoding: .utf8)
     }
 
-    override func tearDownWithError() throws {
+    override func tearDown() async throws {
         try? FileManager.default.removeItem(at: dataDir)
         try? FileManager.default.removeItem(at: seedDir)
     }
 
-    private func launchedAppInConnections() -> XCUIApplication {
+    /// Launches into Connections on a DETERMINISTIC lens. The default Smart lens
+    /// is topic discovery over real embeddings — legitimately EMPTY here (no
+    /// model is provisioned in a UI test run, and there is no fallback), so the
+    /// zoom-journey mechanics are exercised through the Type lens.
+    private func launchedAppInConnections(lens: String = "Type") -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["BIPBOX_DATA_DIR"] = dataDir.path
         app.launchEnvironment["BIPBOX_CONTROL_API"] = "1"
@@ -40,7 +45,17 @@ final class ConnectionsGraphUITests: XCTestCase {
         XCTAssertTrue(waitForControlAPI(), "Control API should come up")
         command(["action": "addFolder", "path": seedDir.path, "depth": "all"])
         app.buttons["toolbar.toggle.connections"].click()
+        selectLens(lens, in: app)
         return app
+    }
+
+    private func selectLens(_ lens: String, in app: XCUIApplication) {
+        let groupBy = app.descendants(matching: .any)["toolbar.groupby"]
+        XCTAssertTrue(groupBy.waitForExistence(timeout: 10), "Group-by switch exists")
+        groupBy.click()
+        let item = app.menuItems[lens]
+        XCTAssertTrue(item.waitForExistence(timeout: 5), "Group-by offers the \(lens) lens")
+        item.click()
     }
 
     // MARK: full zoom journey through the rendered graph
@@ -84,16 +99,11 @@ final class ConnectionsGraphUITests: XCTestCase {
             .matching(NSPredicate(format: "identifier BEGINSWITH 'graph.cluster.'")).firstMatch
         XCTAssertTrue(cluster.waitForExistence(timeout: 15), "Overview clusters render")
 
-        let groupBy = app.descendants(matching: .any)["toolbar.groupby"]
-        XCTAssertTrue(groupBy.waitForExistence(timeout: 5), "Quiet Group-by switch exists")
-        groupBy.click()
-        let typeItem = app.menuItems["Type"]
-        XCTAssertTrue(typeItem.waitForExistence(timeout: 5), "Group-by offers lens options")
-        typeItem.click()
+        selectLens("Source", in: app)
 
-        // After switching lens, the overview still renders clusters.
+        // After switching lens, the overview re-renders with the new grouping.
         XCTAssertTrue(app.descendants(matching: .any)
-            .matching(NSPredicate(format: "identifier BEGINSWITH 'graph.cluster.'")).firstMatch
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'graph.cluster.source:'")).firstMatch
             .waitForExistence(timeout: 10), "Switching lens re-renders clusters")
     }
 
@@ -148,7 +158,7 @@ final class ConnectionsGraphUITests: XCTestCase {
 
     private func sync(_ request: URLRequest) throws -> Data {
         let sem = DispatchSemaphore(value: 0)
-        var result: Result<Data, Error>!
+        nonisolated(unsafe) var result: Result<Data, Error>!  // guarded by the semaphore
         URLSession.shared.dataTask(with: request) { data, _, error in
             if let error { result = .failure(error) } else { result = .success(data ?? Data()) }
             sem.signal()

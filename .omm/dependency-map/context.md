@@ -1,0 +1,1 @@
+Two build systems on purpose: swift build/test for everything headless (fast, 386 tests in ~3s) and xcodegen + xcodebuild for the .app (Metal library, signing, UI tests). scripts/build_app_bundle.sh and scripts/ui-test.sh encode the xcodebuild paths.

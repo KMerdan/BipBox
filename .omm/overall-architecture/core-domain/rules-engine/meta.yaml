@@ -1,0 +1,9 @@
+created: 2026-06-11T08:00:36.297Z
+updated: 2026-06-11T08:00:36.298Z
+update_count: 1
+last_field: description
+kind: nested-class
+title: rules-engine
+children: []
+parentPath:
+  - core-domain
