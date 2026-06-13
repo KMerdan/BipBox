@@ -1,0 +1,28 @@
+graph LR
+    bipbox-app["App Shell\nSources/BipboxApp/"]
+    workspace-ui["Workspace UI\nSources/BipboxWorkspaceUI/"]
+    app-support["Composition Root\nSources/BipboxAppSupport/"]
+    core-domain["Domain Core\nSources/BipboxCore/"]
+    persistence["Persistence\nSources/BipboxPersistence/"]
+    macos-adapters["macOS Adapters\nSources/BipboxMacOSAdapters/"]
+    mlx-embedder["MLX Embedder\nSources/BipboxMLX/"]
+    ai-gateway["AI Gateway\nSources/BipboxAI/"]
+    harness["Headless Harness\nSources/BipboxHarness/"]
+
+    bipbox-app -->|"hosts windows, provisioning UI"| workspace-ui
+    bipbox-app -->|"injects MLXTextEmbedder via embedderFactory"| mlx-embedder
+    bipbox-app -->|"makeDefault() builds all services"| app-support
+    workspace-ui -->|"WorkspaceGraphServices (graph, search, vectors)"| core-domain
+    app-support -->|"wires protocol ports to implementations"| core-domain
+    app-support -->|"SQLite stores, JSON stores"| persistence
+    app-support -->|"file ops, OCR, watcher, permissions"| macos-adapters
+    app-support -->|"orchestrator + semantic answers"| ai-gateway
+    harness -->|"same makeDefault(), no GUI"| app-support
+    persistence -->|"implements KnowledgeStore/SearchService/VectorIndex ports"| core-domain
+    macos-adapters -->|"implements FileTextExtracting/FolderWatcher ports"| core-domain
+    mlx-embedder -->|"implements TextEmbedder + EmbedderProvisioning"| core-domain
+
+    classDef entry fill:#89b4fa,stroke:#89b4fa,color:#1e1e2e
+    classDef store fill:#a6e3a1,stroke:#a6e3a1,color:#1e1e2e
+    class bipbox-app,harness entry
+    class persistence store

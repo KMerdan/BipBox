@@ -1,0 +1,17 @@
+graph LR
+    needs-download["needsDownload\nfirst run, no cached model"]
+    downloading["downloading(progress)\nHub download + load"]
+    ready["ready\ncontainer loaded, marker written"]
+    failed["failed(message)\nnetwork / load error"]
+    backfill-run["Backfill + Recompute\nbackfillAndRecompute()"]
+
+    needs-download -->|"user clicks provisioning.download"| downloading
+    downloading -->|"prepare() succeeds"| ready
+    downloading -->|"prepare() throws"| failed
+    failed -->|"provisioning.retry"| downloading
+    ready -->|"onBecameReady fires once"| backfill-run
+
+    classDef entry fill:#89b4fa,stroke:#89b4fa,color:#1e1e2e
+    classDef concern fill:#f38ba8,stroke:#f38ba8,color:#1e1e2e
+    class needs-download entry
+    class failed concern

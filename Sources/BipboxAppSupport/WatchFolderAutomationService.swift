@@ -23,6 +23,13 @@ public actor WatchFolderAutomationService {
     private let commonLocationURLs: [CommonCaptureLocation: URL]
     private var watchers: [UUID: PollingFolderWatcher] = [:]
     private var scanTask: Task<Void, Never>?
+    // Arrivals trigger a debounced source rescan so new files get full unit-model
+    // classification (tags, collections, dedup, fingerprints) — the per-file
+    // intake above only runs rules and basic indexing. Debounced because
+    // downloads / git clones arrive in bursts; classify the settled state.
+    private let rescanDebounceNanoseconds: UInt64
+    private var rescanHandler: (@Sendable (UUID) async -> Void)?
+    private var pendingRescans: [UUID: Task<Void, Never>] = [:]
 
     public init(
         permissionStore: PermissionStore,
@@ -30,6 +37,7 @@ public actor WatchFolderAutomationService {
         intakeService: IntakeService,
         appSettingsStore: AppSettingsStore,
         scanIntervalNanoseconds: UInt64 = 2_000_000_000,
+        rescanDebounceNanoseconds: UInt64 = 8_000_000_000,
         fileManager: FileManager = .default,
         commonLocationURLs: [CommonCaptureLocation: URL] = [:]
     ) {
@@ -38,8 +46,30 @@ public actor WatchFolderAutomationService {
         self.intakeService = intakeService
         self.appSettingsStore = appSettingsStore
         self.scanIntervalNanoseconds = scanIntervalNanoseconds
+        self.rescanDebounceNanoseconds = rescanDebounceNanoseconds
         self.fileManager = fileManager
         self.commonLocationURLs = commonLocationURLs
+    }
+
+    /// Called with the SOURCE id after a quiet period follows new arrivals;
+    /// the composition root points this at SourceLifecycleCoordinating.scanSource.
+    public func setRescanHandler(_ handler: (@Sendable (UUID) async -> Void)?) {
+        rescanHandler = handler
+    }
+
+    private func scheduleRescan(sourceID: UUID) {
+        guard rescanHandler != nil else { return }
+        pendingRescans[sourceID]?.cancel()
+        pendingRescans[sourceID] = Task { [rescanDebounceNanoseconds] in
+            try? await Task.sleep(nanoseconds: rescanDebounceNanoseconds)
+            guard !Task.isCancelled else { return }
+            await self.runPendingRescan(sourceID: sourceID)
+        }
+    }
+
+    private func runPendingRescan(sourceID: UUID) async {
+        pendingRescans[sourceID] = nil
+        await rescanHandler?(sourceID)
     }
 
     @discardableResult
@@ -107,6 +137,11 @@ public actor WatchFolderAutomationService {
             let count = try await watcher.scanNow(receivedAt: receivedAt).count
             emittedCount += count
             try await updateSourceAfterScan(id: id, emittedCount: count)
+            // Watchers are keyed by SOURCE id in source-backed mode — only then
+            // can arrivals be reconciled through a source rescan.
+            if count > 0, sourceStore != nil {
+                scheduleRescan(sourceID: id)
+            }
         }
         return emittedCount
     }

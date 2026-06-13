@@ -619,6 +619,10 @@ public struct IndexedItem: Codable, Equatable, Identifiable, Sendable {
     public var extractedText: String?
     public var aiSummary: String?
     public var status: IndexedItemStatus
+    /// Fingerprint of the content this item was last indexed/embedded from
+    /// (files: size + head/tail hash; aggregates: composite over members).
+    /// Rescans skip items whose fingerprint is unchanged.
+    public var contentFingerprint: String?
 
     public init(
         id: UUID = UUID(),
@@ -636,7 +640,8 @@ public struct IndexedItem: Codable, Equatable, Identifiable, Sendable {
         tags: [String] = [],
         extractedText: String? = nil,
         aiSummary: String? = nil,
-        status: IndexedItemStatus
+        status: IndexedItemStatus,
+        contentFingerprint: String? = nil
     ) {
         self.id = id
         self.currentPath = currentPath
@@ -654,6 +659,7 @@ public struct IndexedItem: Codable, Equatable, Identifiable, Sendable {
         self.extractedText = extractedText
         self.aiSummary = aiSummary
         self.status = status
+        self.contentFingerprint = contentFingerprint
     }
 }
 

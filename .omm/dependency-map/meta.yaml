@@ -1,0 +1,18 @@
+created: 2026-06-11T08:11:33.228Z
+updated: 2026-06-11T08:11:46.786Z
+update_count: 4
+last_field: context
+git_commit: "7959126"
+git_branch: main
+children:
+  - adapters-target
+  - ai-target
+  - app-support-target
+  - bipbox-app-target
+  - core-target
+  - harness-cli
+  - harness-lib
+  - menubar-ui
+  - mlx-target
+  - persistence-target
+  - workspace-ui-target

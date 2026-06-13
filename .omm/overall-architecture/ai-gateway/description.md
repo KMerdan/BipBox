@@ -1,0 +1,1 @@
+Sources/BipboxAI/ — LLM-facing services behind ports: LLMProvider abstraction, ToolBackedAIOrchestrator (agent loop over registered knowledge tools), SemanticAnswerService (RAG over RetrievalService), with NoModelAIGateway/NoModelAgentOrchestrator as the default no-LLM implementations so the app works fully offline.

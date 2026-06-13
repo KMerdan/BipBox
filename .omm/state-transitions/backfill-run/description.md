@@ -1,0 +1,1 @@
+BipboxApplicationModel.backfillAndRecompute(): EmbeddingBackfillService.backfill(limit: 10_000) embeds every vectorless non-dup item with the now-ready model, then WorkspaceModel.recomputeClusters() runs topic discovery so the Smart graph populates without restarting the app.

@@ -55,9 +55,6 @@ final class BipboxE2EDummyProjectTests: XCTestCase {
         XCTAssertTrue(clusters.contains("Images"))
         XCTAssertTrue(clusters.contains("Code"))
         XCTAssertGreaterThanOrEqual(clusters.count, 4, "Expected several type clusters, got \(clusters)")
-
-        // Categories that co-occur in the same folder produce overview edges.
-        XCTAssertFalse(harness.model.clusterLinks().isEmpty, "Files sharing folders should link clusters")
     }
 
     func testTopLevelDepthCapturesSubfoldersAsSingleItems() async throws {

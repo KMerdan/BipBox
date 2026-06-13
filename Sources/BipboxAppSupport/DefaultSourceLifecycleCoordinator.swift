@@ -7,6 +7,15 @@ public actor DefaultSourceLifecycleCoordinator: SourceLifecycleCoordinating {
     private let scanner: ColdStartScanner?
     private let watcherReloader: SourceWatcherReloading?
     private let now: @Sendable () -> Date
+    private var scanProgress: (@Sendable (String, ColdStartScanProgress) async -> Void)?
+
+    /// Observe every scan this coordinator runs (the app renders it as the
+    /// "Indexing <source> · n of m · ETA" status line). `async` matches the
+    /// protocol requirement exactly so the actor method wins over the no-op
+    /// default extension (which exists for non-scanning conformers).
+    public func setScanProgress(_ handler: (@Sendable (String, ColdStartScanProgress) async -> Void)?) async {
+        scanProgress = handler
+    }
 
     public init(
         permissionStore: PermissionStore,
@@ -190,6 +199,11 @@ public actor DefaultSourceLifecycleCoordinator: SourceLifecycleCoordinating {
             return nil
         }
 
+        let displayName = source.displayName
+        var scanProgressClosure: (@Sendable (ColdStartScanProgress) async -> Void)?
+        if let progressHandler = scanProgress {
+            scanProgressClosure = { progress in await progressHandler(displayName, progress) }
+        }
         let result = try await scanner.scan(
             ColdStartScanRequest(
                 permissionRecordID: permissionRecordID,
@@ -198,7 +212,7 @@ public actor DefaultSourceLifecycleCoordinator: SourceLifecycleCoordinating {
                 receivedAt: now(),
                 sourceDetail: source.captureDetail
             ),
-            progress: nil
+            progress: scanProgressClosure
         )
         source.indexState = result.failures.isEmpty ? .completed : .failed
         source.lastScanAt = now()

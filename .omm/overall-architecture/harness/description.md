@@ -1,0 +1,1 @@
+Sources/BipboxHarness/ + BipboxHarnessCLI — a headless driver over the same makeDefault() composition root: start the app services, add folders, run scans, snapshot the library/graph, select nodes. The 386-test suite (incl. the principle-driven acceptance series) runs entirely through it with swift test, no GUI. BipboxMenuBarUI is a small status companion target.

@@ -1,0 +1,16 @@
+graph LR
+    workspace-model["WorkspaceModel\nWorkspaceModel.swift"]
+    connections-view["Connections Graph\nConnectionsView.swift"]
+    library-center["Library + Sidebar\nLibraryCenterView.swift, SidebarView.swift"]
+    inspector["Inspector\nInspectorView.swift"]
+    control-server["Control API (DEBUG)\nWorkspaceControlServer.swift"]
+    settings["Settings\nSettingsWorkspaceView.swift"]
+
+    library-center -->|"selection, search, lens"| workspace-model
+    connections-view -->|"clusters + clusterLinks + ego graphs"| workspace-model
+    inspector -->|"selected item detail"| workspace-model
+    settings -->|"AppSettings via view model"| workspace-model
+    control-server -->|"scripted commands (addFolder, select, snapshot)"| workspace-model
+
+    classDef entry fill:#89b4fa,stroke:#89b4fa,color:#1e1e2e
+    class control-server entry

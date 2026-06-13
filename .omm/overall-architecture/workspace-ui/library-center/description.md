@@ -1,0 +1,1 @@
+SidebarView (All Items / Inbox / sources / saved scopes) + LibraryCenterView (item cards, toolbar search, group-by control toolbar.groupby). Reads library.results from WorkspaceModel; selection drives the Inspector and the graph center.

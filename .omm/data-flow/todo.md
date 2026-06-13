@@ -1,0 +1,1 @@
+Incremental indexing (content-fingerprint diff so only new/changed files re-embed) and cosine~0.97 near-dup collapse remain unported from the experiment. Multimodal image embeddings (Qwen3-VL-2B) would give Media files real vectors instead of name-only.

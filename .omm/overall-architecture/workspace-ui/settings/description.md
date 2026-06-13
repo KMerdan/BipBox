@@ -1,0 +1,1 @@
+SettingsWorkspaceView + SettingsWorkspaceViewModel — app preferences (AI enabled, watched-folder behavior) persisted through JSONAppSettingsStore. Reachable via the app menu (Cmd+, is unreliable under XCUITest).

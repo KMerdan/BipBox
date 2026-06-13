@@ -1,0 +1,1 @@
+Bounded, type-routed text extraction. Direct UTF-8 read for plain text + source code; FileTextExtracting delegate for PDF (PDFKit), doc/docx/rtf/html/odt (NSAttributedString importers), and images (Vision OCR, .fast). 6000-char slice into metadata["text.content"]; projects/collections get their composed unit text written here instead.

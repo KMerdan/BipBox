@@ -1,0 +1,1 @@
+The consumer: WorkspaceModel.recomputeClusters (.smart) maps topics to LibraryClusters (id topic:<n>) and topic edges to weighted cluster links; ConnectionsView renders the orb overview, cluster zoom, and file ego. Other lenses (Type/Source/Time) are deterministic groupings that need no vectors.

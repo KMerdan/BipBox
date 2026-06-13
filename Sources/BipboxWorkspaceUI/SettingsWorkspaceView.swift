@@ -66,6 +66,7 @@ public struct SettingsWorkspaceView: View {
                         Task { await viewModel.setAIEnabled(enabled) }
                     }
                 ))
+                .accessibilityIdentifier("settings.aiEnabled")
 
                 Picker("Provider", selection: Binding(
                     get: { viewModel.aiProvider },

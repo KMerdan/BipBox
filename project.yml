@@ -49,6 +49,11 @@ targets:
         product: BipboxAI
       - package: Bipbox
         product: BipboxCore
+      # On-device MLX embeddings. Linking this product is what pulls MLX's Metal
+      # library (.metallib) into the .app bundle — without it the app crashes when
+      # the embedding model loads (e.g. on first Download).
+      - package: Bipbox
+        product: BipboxMLX
     settings:
       base:
         INFOPLIST_FILE: Sources/BipboxApp/Resources/Info.plist

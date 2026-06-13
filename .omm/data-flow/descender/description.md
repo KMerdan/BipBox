@@ -1,0 +1,1 @@
+The unit classifier (see overall-architecture/core-domain/descent-model for full rules). Output per node: kind (project/workspaceMember/bundle/collection/file), collectionURL for members, markers for projects, byteFingerprint + isDuplicate for files. Scanner maps these to tags: unit:*, collection:<item-uuid>, dup.

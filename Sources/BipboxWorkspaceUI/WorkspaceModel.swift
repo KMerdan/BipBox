@@ -43,6 +43,23 @@ public final class WorkspaceModel: ObservableObject {
     /// Cached clusters for the current lens (recomputed async; semantic clustering
     /// is async, so this is a stored cache rather than a live computed value).
     @Published public private(set) var clusters: [LibraryCluster] = []
+    /// Topic<->topic edges (semantic centroid similarity) backing the current `clusters`.
+    private var topicEdges: [(a: Int, b: Int, weight: Double)] = []
+    /// Long-running indexing work (first scan / embedding backfill) rendered as
+    /// the sidebar status line with "n of m" + ETA. Nil when idle.
+    @Published public private(set) var indexingActivity: IndexingActivity?
+
+    /// Report (or clear) indexing progress. Throttled by callers; preserves the
+    /// original start time while the same kind of work continues so the ETA is
+    /// computed over the whole run, not the latest slice.
+    public func reportIndexing(kind: IndexingActivity.Kind?, completed: Int = 0, total: Int = 0) {
+        guard let kind, total > 0, completed < total else {
+            indexingActivity = nil
+            return
+        }
+        let startedAt = (indexingActivity?.kind == kind) ? indexingActivity!.startedAt : Date()
+        indexingActivity = IndexingActivity(kind: kind, completed: completed, total: total, startedAt: startedAt)
+    }
 
     /// Injected capture hook (drag-drop → real drop intake handler).
     public var onDropURLs: ([URL]) -> Void = { _ in }
@@ -582,40 +599,19 @@ extension WorkspaceModel {
         }
     }
 
-    /// Cluster edges weighted by how many **folders** two clusters share. Works
-    /// for any clustering (type, semantic, source, …) via `clusterOf`.
+    /// Topic<->topic edges from semantic centroid similarity (TopicDiscovery),
+    /// as (clusterIndexA, clusterIndexB, lineWeight). Replaces the old "two clusters
+    /// share a parent folder" hairball.
     public func clusterLinks() -> [(Int, Int, Int)] {
-        let cls = clusters
-        guard cls.count > 1 else { return [] }
-        var indexByID: [String: Int] = [:]
-        for (i, c) in cls.enumerated() { indexByID[c.id] = i }
-
-        var clustersByFolder: [String: Set<Int>] = [:]
-        for it in library.results {
-            let folder = (it.currentPath as NSString).deletingLastPathComponent
-            if let cl = clusterOf(it.id), let ci = indexByID[cl.id] {
-                clustersByFolder[folder, default: []].insert(ci)
-            }
-        }
-
-        var pairCounts: [Int: Int] = [:]   // (i * cls.count + j) -> shared folder count
-        for (_, set) in clustersByFolder {
-            let arr = set.sorted()
-            guard arr.count > 1 else { continue }
-            for a in 0..<arr.count {
-                for b in (a + 1)..<arr.count {
-                    pairCounts[arr[a] * cls.count + arr[b], default: 0] += 1
-                }
-            }
-        }
-        return pairCounts.map { key, count in (key / cls.count, key % cls.count, count) }
+        topicEdges.map { ($0.a, $0.b, max(1, Int(($0.weight * 10).rounded()))) }
     }
 }
 
 // MARK: - Group-by lens + cluster recomputation
 
-/// How the Connections graph groups items. "Smart" = semantic when embeddings are
-/// available, else falls back to type.
+/// How the Connections graph groups items. "Smart" = semantic topic discovery
+/// (mean-center -> kNN -> Louvain -> soft membership). Type/Source/Time are
+/// deterministic groupings.
 public enum LibraryLens: String, CaseIterable, Sendable, Identifiable {
     case smart, type, source, time
     public var id: String { rawValue }
@@ -636,19 +632,89 @@ extension WorkspaceModel {
         Task { await recomputeClusters() }
     }
 
-    /// Recompute the cached `clusters` for the active lens. Semantic clustering is
-    /// async (reads the vector index); other lenses are synchronous.
+    /// Recompute the cached `clusters` for the active lens. Smart = semantic topic
+    /// discovery (async, reads the vector index); the others are deterministic.
     public func recomputeClusters() async {
         switch lens {
         case .type:
+            topicEdges = []
             clusters = typeClusters()
         case .source:
+            topicEdges = []
             clusters = sourceClusters()
         case .time:
+            topicEdges = []
             clusters = timeClusters()
         case .smart:
-            clusters = await semanticClusters() ?? typeClusters()
+            let graph = await discoverTopics()
+            topicEdges = graph.edges
+            clusters = graph.topics.enumerated().map { idx, topic in
+                LibraryCluster(id: "topic:\(topic.id)", name: topic.label,
+                               color: BBPalette.color(for: idx), itemIDs: topic.memberIDs)
+            }
         }
+    }
+
+    /// Discover topics from the stored embeddings of the current library using the
+    /// validated recipe. Empty when there are no embeddings yet — no fallback.
+    ///
+    /// Discovery SEEDS are aggregate units (projects/collections), content-bearing
+    /// loose items, and a capped sample of each collection's members. Everything
+    /// else (the bulk of a 7k-file dump, media, bundles) is soft-ASSIGNED to the
+    /// discovered topics but never drives them — the experiment's anti-flooding
+    /// rule that turns hundreds of micro-topics back into ~dozens of real ones.
+    private func discoverTopics() async -> TopicGraph {
+        guard let services = graphServices,
+              let vectorIndex = services.vectorIndex,
+              let embedder = services.embedder,
+              let records = try? await vectorIndex.vectors(modelID: embedder.modelID),
+              !records.isEmpty
+        else { return .empty }
+
+        let samplePerCollection = 15
+        var seedIDs: Set<UUID> = []
+        var assignIDs: Set<UUID> = []
+        var membersByCollection: [String: [IndexedItem]] = [:]
+        for item in library.results {
+            if item.tags.contains("unit:member"),
+               let collection = item.tags.first(where: { $0.hasPrefix("collection:") }) {
+                membersByCollection[collection, default: []].append(item)
+            } else if item.tags.contains("unit:project") || item.tags.contains("unit:collection") {
+                seedIDs.insert(item.id)
+            } else if item.tags.contains("unit:bundle") {
+                assignIDs.insert(item.id)
+            } else {
+                // Loose files and legacy/drag-drop items: content-bearing kinds
+                // seed discovery, metadata-only kinds (media/archives) are
+                // assign-only so they never pollute the topic structure.
+                switch typeCategory(for: item) {
+                case "Documents", "Spreadsheets", "Presentations", "Code", "Folders":
+                    seedIDs.insert(item.id)
+                default:
+                    assignIDs.insert(item.id)
+                }
+            }
+        }
+        for members in membersByCollection.values {
+            let sorted = members.sorted { $0.displayName < $1.displayName }
+            for (index, member) in sorted.enumerated() {
+                if index < samplePerCollection { seedIDs.insert(member.id) }
+                else { assignIDs.insert(member.id) }
+            }
+        }
+
+        let seeds = records.filter { seedIDs.contains($0.itemID) }
+            .map { (id: $0.itemID, vector: $0.vector) }
+        let assign = records.filter { assignIDs.contains($0.itemID) }
+            .map { (id: $0.itemID, vector: $0.vector) }
+        guard seeds.count >= 3 else { return .empty }
+        var names: [UUID: String] = [:]
+        for it in library.results { names[it.id] = it.displayName }
+        // O(n^2) kNN over the seeds — must run off the main actor or the UI
+        // freezes for the whole recompute.
+        return await Task.detached(priority: .userInitiated) {
+            TopicDiscovery.discover(vectors: seeds, assign: assign, names: names)
+        }.value
     }
 
     private func sourceClusters() -> [LibraryCluster] {
@@ -670,90 +736,6 @@ extension WorkspaceModel {
         }
     }
 
-    /// Cluster items by embedding proximity (threshold union-find over the stored
-    /// vectors). Returns nil when no embeddings are available (caller falls back).
-    private func semanticClusters(threshold: Double = 0.55) async -> [LibraryCluster]? {
-        guard let services = graphServices, let vectorIndex = services.vectorIndex, let embedder = services.embedder
-        else { return nil }
-        guard let records = try? await vectorIndex.vectors(modelID: embedder.modelID), !records.isEmpty
-        else { return nil }
-
-        let ids = Set(library.results.map(\.id))
-        let vectors = records.filter { ids.contains($0.itemID) }
-        guard vectors.count >= 2 else { return nil }
-
-        // Union-find over pairs with cosine >= threshold.
-        var parent = Array(0..<vectors.count)
-        func find(_ x: Int) -> Int { var r = x; while parent[r] != r { parent[r] = parent[parent[r]]; r = parent[r] }; return r }
-        func union(_ a: Int, _ b: Int) { parent[find(a)] = find(b) }
-        for i in 0..<vectors.count {
-            for j in (i + 1)..<vectors.count where Self.cosine(vectors[i].vector, vectors[j].vector) >= threshold {
-                union(i, j)
-            }
-        }
-        var groups: [Int: [UUID]] = [:]
-        for i in vectors.indices { groups[find(i), default: []].append(vectors[i].itemID) }
-
-        // Entity vectors (folders/projects) for naming clusters by what they're near.
-        let entities = (try? await vectorIndex.vectors(modelID: VectorModel.entity(embedder.modelID))) ?? []
-        let vectorByID = Dictionary(uniqueKeysWithValues: vectors.map { ($0.itemID, $0.vector) })
-
-        let sorted = groups.values.sorted { $0.count > $1.count }
-        var result: [LibraryCluster] = []
-        for (idx, members) in sorted.enumerated() {
-            let label = entityLabel(for: members, vectorByID: vectorByID, entities: entities)
-                ?? clusterLabel(for: members)
-            result.append(LibraryCluster(id: "sem:\(idx)", name: label,
-                                         color: BBPalette.color(for: idx), itemIDs: members))
-        }
-        return result
-    }
-
-    /// Name a cluster by the entity (project/folder) nearest its centroid.
-    private func entityLabel(for members: [UUID], vectorByID: [UUID: [Float]], entities: [VectorRecord]) -> String? {
-        guard !entities.isEmpty else { return nil }
-        let memberVectors = members.compactMap { vectorByID[$0] }
-        guard let first = memberVectors.first else { return nil }
-        var centroid = [Float](repeating: 0, count: first.count)
-        for v in memberVectors where v.count == centroid.count {
-            for i in centroid.indices { centroid[i] += v[i] }
-        }
-        guard let unit = NLEmbeddingTextEmbedder.unitNormalized(centroid) else { return nil }
-        let best = entities.max { Self.cosine(unit, $0.vector) < Self.cosine(unit, $1.vector) }
-        guard let best, Self.cosine(unit, best.vector) > 0.4 else { return nil }
-        // Resolve the entity's display name via the graph store (best-effort).
-        return entityName(best.itemID)
-    }
-
-    private func entityName(_ id: UUID) -> String? {
-        // Folder/project contexts are named after the source folder.
-        sources.first { source in
-            source.url.map { KnowledgeIDs.folderContext(for: $0) == id } ?? false
-        }?.displayName
-    }
-
-    /// Label a semantic cluster by the most common significant token in member names.
-    private func clusterLabel(for members: [UUID]) -> String {
-        var counts: [String: Int] = [:]
-        for id in members {
-            guard let it = item(id) else { continue }
-            let base = (it.displayName as NSString).deletingPathExtension.lowercased()
-            for token in base.split(whereSeparator: { !$0.isLetter && !$0.isNumber }) where token.count > 2 {
-                counts[String(token), default: 0] += 1
-            }
-        }
-        if let top = counts.max(by: { $0.value < $1.value })?.key, counts[top]! > 1 {
-            return top.capitalized
-        }
-        return "Group \(members.count)"
-    }
-
-    static func cosine(_ a: [Float], _ b: [Float]) -> Double {
-        guard a.count == b.count else { return 0 }
-        var sum: Float = 0
-        for i in a.indices { sum += a[i] * b[i] }
-        return Double(sum)   // vectors are unit-normalized at embed time
-    }
 }
 
 // MARK: - Real graph services + async graph loading

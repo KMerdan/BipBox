@@ -1,0 +1,1 @@
+Banner accessibility ids must stay on LEAF elements (provisioning.download / provisioning.downloading / provisioning.retry) — a container-level identifier collapses the a11y subtree and XCUITest loses the buttons. The real download crashes in swift-build binaries (metallib); only test via the xcodebuild .app.

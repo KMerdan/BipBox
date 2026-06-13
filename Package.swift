@@ -17,7 +17,15 @@ let package = Package(
         .library(name: "BipboxMacOSAdapters", targets: ["BipboxMacOSAdapters"]),
         .library(name: "BipboxPersistence", targets: ["BipboxPersistence"]),
         .library(name: "BipboxAI", targets: ["BipboxAI"]),
-        .library(name: "BipboxAppSupport", targets: ["BipboxAppSupport"])
+        .library(name: "BipboxAppSupport", targets: ["BipboxAppSupport"]),
+        .library(name: "BipboxMLX", targets: ["BipboxMLX"])
+    ],
+    dependencies: [
+        // MLX on-device embeddings (Apple Silicon, no server). Isolated to BipboxMLX,
+        // which only BipboxApp links — keeps tests/harness/AI MLX-free & fast.
+        .package(url: "https://github.com/ml-explore/mlx-swift-lm", .upToNextMajor(from: "3.31.3")),
+        .package(url: "https://github.com/huggingface/swift-huggingface", .upToNextMinor(from: "0.9.0")),
+        .package(url: "https://github.com/huggingface/swift-transformers", .upToNextMinor(from: "1.3.0"))
     ],
     targets: [
         .executableTarget(
@@ -28,9 +36,20 @@ let package = Package(
                 "BipboxMenuBarUI",
                 "BipboxMacOSAdapters",
                 "BipboxPersistence",
-                "BipboxAI"
+                "BipboxAI",
+                "BipboxMLX"
             ],
             exclude: ["Resources/Info.plist"]
+        ),
+        .target(
+            name: "BipboxMLX",
+            dependencies: [
+                "BipboxCore",
+                .product(name: "MLXEmbedders", package: "mlx-swift-lm"),
+                .product(name: "MLXHuggingFace", package: "mlx-swift-lm"),
+                .product(name: "HuggingFace", package: "swift-huggingface"),
+                .product(name: "Tokenizers", package: "swift-transformers")
+            ]
         ),
         .target(
             name: "BipboxHarness",

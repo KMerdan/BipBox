@@ -1,0 +1,1 @@
+SQLiteSearchIndex — FTS5 over displayName, extractedText, and tags. Powers toolbar search, the lexical half of retrieval, and the backfill's item enumeration. Works with zero vectors (the app is fully usable before the model is downloaded).

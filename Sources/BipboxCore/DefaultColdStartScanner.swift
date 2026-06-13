@@ -79,7 +79,7 @@ public final class DefaultColdStartScanner: ColdStartScanner, @unchecked Sendabl
             )
         )
 
-        let itemURLs = try scanCandidateURLs(rootURL: permissionRecord.url, recursive: request.recursive)
+        let candidates = try scanCandidates(rootURL: permissionRecord.url, recursive: request.recursive)
         let rootContext = ContextNode(
             id: KnowledgeIDs.folderContext(for: permissionRecord.url),
             kind: .folder,
@@ -92,9 +92,18 @@ public final class DefaultColdStartScanner: ColdStartScanner, @unchecked Sendabl
         try await knowledgeStore.upsertContext(rootContext)
         await embedEntity(rootContext)
 
+        // Incremental rescan: load what is already indexed ONCE; candidates whose
+        // content fingerprint is unchanged are skipped entirely (no extraction,
+        // no FTS write, no embedding, no capture event).
+        var existingByID: [UUID: IndexedItem] = [:]
+        if let searchService,
+           let indexed = try? await searchService.search(SearchQuery(text: "", limit: 1_000_000)) {
+            for item in indexed.items { existingByID[item.id] = item }
+        }
+
         var scannedCount = 0
         var failures: [ColdStartScanFailure] = []
-        for url in itemURLs {
+        for candidate in candidates {
             if Task.isCancelled {
                 throw ColdStartScannerError.cancelled(scannedCount: scannedCount)
             }
@@ -103,32 +112,47 @@ public final class DefaultColdStartScanner: ColdStartScanner, @unchecked Sendabl
                 ColdStartScanProgress(
                     phase: .scanning,
                     scannedCount: scannedCount,
-                    totalCount: itemURLs.count,
-                    currentURL: url
+                    totalCount: candidates.count,
+                    currentURL: candidate.url
                 )
             )
 
+            let existing = existingByID[Self.itemID(for: candidate.url)]
+            if let fingerprint = candidate.fingerprint,
+               let existing,
+               existing.contentFingerprint == fingerprint,
+               existing.status != .missing {
+                scannedCount += 1
+                continue
+            }
+
             do {
-                try await capture(url: url, rootContextID: rootContext.id, permissionRecord: permissionRecord, request: request)
+                try await capture(candidate, rootContextID: rootContext.id, permissionRecord: permissionRecord,
+                                  request: request, replacesExisting: existing != nil)
                 scannedCount += 1
             } catch {
                 let message = error.localizedDescription
-                failures.append(ColdStartScanFailure(url: url, message: message))
+                failures.append(ColdStartScanFailure(url: candidate.url, message: message))
                 try await activityLog?.append(
                     ActivityEvent(
                         kind: .failed,
-                        message: "Cold-start scan failed for \(url.lastPathComponent): \(message)",
+                        message: "Cold-start scan failed for \(candidate.url.lastPathComponent): \(message)",
                         occurredAt: request.receivedAt
                     )
                 )
             }
         }
 
+        if request.recursive {
+            await reconcileVanishedItems(
+                under: permissionRecord.url, candidates: candidates, existingByID: existingByID)
+        }
+
         await progress?(
             ColdStartScanProgress(
                 phase: .completed,
                 scannedCount: scannedCount,
-                totalCount: itemURLs.count,
+                totalCount: candidates.count,
                 currentURL: permissionRecord.url,
                 message: "Cold-start scan completed."
             )
@@ -161,36 +185,125 @@ public final class DefaultColdStartScanner: ColdStartScanner, @unchecked Sendabl
         }
     }
 
-    private func scanCandidateURLs(rootURL: URL, recursive: Bool) throws -> [URL] {
-        do {
-            if recursive {
-                guard let enumerator = fileManager.enumerator(
+    /// One item to index: the URL plus its unit classification (tags), how to
+    /// compose its unit text (aggregates only — composed LAZILY so skipped
+    /// candidates cost nothing), whether to skip embedding (exact duplicates
+    /// are indexed for search but never embedded), and the content fingerprint
+    /// that makes rescans incremental.
+    struct ScanCandidate {
+        enum UnitTextSource {
+            case project
+            case collection(members: [URL])
+        }
+
+        let url: URL
+        var tags: [String] = []
+        var unitTextSource: UnitTextSource? = nil
+        var skipEmbed: Bool = false
+        var fingerprint: String? = nil
+    }
+
+    /// Recursive scans use the FilesystemDescender: projects/collections become
+    /// single aggregate units, collection members stay individually indexed, and
+    /// exact byte-fingerprint duplicates are flagged. Non-recursive scans keep
+    /// the flat top-level listing.
+    private func scanCandidates(rootURL: URL, recursive: Bool) throws -> [ScanCandidate] {
+        guard recursive else {
+            do {
+                return try fileManager.contentsOfDirectory(
                     at: rootURL,
                     includingPropertiesForKeys: Self.resourceKeys,
                     options: [.skipsHiddenFiles]
-                ) else {
-                    return []
-                }
-                return enumerator.compactMap { $0 as? URL }.sorted { $0.path < $1.path }
+                )
+                .sorted { $0.path < $1.path }
+                .map { ScanCandidate(url: $0) }
+            } catch {
+                throw ColdStartScannerError.scanFailed(rootURL, error.localizedDescription)
             }
+        }
 
-            return try fileManager.contentsOfDirectory(
-                at: rootURL,
-                includingPropertiesForKeys: Self.resourceKeys,
-                options: [.skipsHiddenFiles]
-            )
-            .sorted { $0.path < $1.path }
-        } catch {
-            throw ColdStartScannerError.scanFailed(rootURL, error.localizedDescription)
+        let units = FilesystemDescender(fileManager: fileManager).descend(root: rootURL)
+        var membersByCollection: [URL: [URL]] = [:]
+        for unit in units where unit.kind == .file {
+            if let collection = unit.collectionURL {
+                membersByCollection[collection, default: []].append(unit.url)
+            }
+        }
+
+        return units.map { unit in
+            switch unit.kind {
+            case .project, .workspaceMember:
+                return ScanCandidate(
+                    url: unit.url,
+                    tags: ["unit:project"],
+                    unitTextSource: .project,
+                    fingerprint: unit.byteFingerprint
+                )
+            case .bundle:
+                return ScanCandidate(url: unit.url, tags: ["unit:bundle"], fingerprint: unit.byteFingerprint)
+            case .collection:
+                return ScanCandidate(
+                    url: unit.url,
+                    tags: ["unit:collection"],
+                    unitTextSource: .collection(members: membersByCollection[unit.url] ?? []),
+                    fingerprint: unit.byteFingerprint
+                )
+            case .file:
+                var tags: [String]
+                if let collection = unit.collectionURL {
+                    tags = ["unit:member", "collection:\(Self.itemID(for: collection).uuidString)"]
+                } else {
+                    tags = ["unit:loose"]
+                }
+                if unit.isDuplicate { tags.append("dup") }
+                return ScanCandidate(url: unit.url, tags: tags, skipEmbed: unit.isDuplicate,
+                                     fingerprint: unit.byteFingerprint)
+            }
+        }
+    }
+
+    /// Remove or mark items that a completed recursive scan no longer accounts
+    /// for: file gone from disk -> status .missing (recoverable); file present
+    /// but no longer a unit (now inside a project, pruned dir, ...) -> dropped
+    /// from the search index (the knowledge store keeps its history).
+    private func reconcileVanishedItems(
+        under root: URL, candidates: [ScanCandidate], existingByID: [UUID: IndexedItem]
+    ) async {
+        guard let searchService else { return }
+        let seen = Set(candidates.map { Self.itemID(for: $0.url) })
+        // Stored paths are symlink-resolved (/private/var/...). Foundation's
+        // resolvingSymlinksInPath() deliberately does NOT resolve /var -> /private/var,
+        // so use realpath(3) for the real on-disk form and match both.
+        let standardized = root.standardizedFileURL
+        var forms = Set([standardized.path])
+        if let real = standardized.path.withCString({ realpath($0, nil) }) {
+            forms.insert(String(cString: real))
+            free(real)
+        }
+        let prefixes = forms.map { $0 + "/" }
+        for (id, item) in existingByID
+        where !seen.contains(id) && prefixes.contains(where: { item.currentPath.hasPrefix($0) }) {
+            if fileManager.fileExists(atPath: item.currentPath) {
+                try? await (searchService as? SearchIndexRemoving)?.remove(id: id)
+                if let embedder, let vectorIndex {
+                    try? await vectorIndex.deleteVector(itemID: id, modelID: embedder.modelID)
+                }
+            } else if item.status != .missing {
+                var updated = item
+                updated.status = .missing
+                try? await searchService.update(updated)
+            }
         }
     }
 
     private func capture(
-        url: URL,
+        _ candidate: ScanCandidate,
         rootContextID: UUID,
         permissionRecord: PermissionRecord,
-        request scanRequest: ColdStartScanRequest
+        request scanRequest: ColdStartScanRequest,
+        replacesExisting: Bool = false
     ) async throws {
+        let url = candidate.url
         let organizationRequest = OrganizationRequest(
             source: intakeSource(for: scanRequest),
             sourceID: scanRequest.sourceID,
@@ -204,8 +317,23 @@ public final class DefaultColdStartScanner: ColdStartScanner, @unchecked Sendabl
             organizationRequest,
             options: InspectionOptions(includeContentHash: false, includeShallowFolderSummary: true, allowRecursiveFolderInspection: false)
         )
-        profile.id = Self.stableUUID("knowledge-item:\(url.standardizedFileURL.path)")
+        profile.id = Self.itemID(for: url)
         profile = await enrichWithExtractedMetadata(profile)
+        switch candidate.unitTextSource {
+        case .project:
+            // Aggregate units (projects/collections) are REPRESENTED by their
+            // composed unit text — it feeds lexical search and the embedding.
+            // Composed here, not at candidate time, so skipped items cost nothing.
+            let unitText = UnitTextComposer.projectText(url: url, fileManager: fileManager)
+            profile.metadata["text.content"] = unitText
+            profile.extractedTextSummary = unitText
+        case .collection(let members):
+            let unitText = UnitTextComposer.collectionText(url: url, memberURLs: members)
+            profile.metadata["text.content"] = unitText
+            profile.extractedTextSummary = unitText
+        case nil:
+            break
+        }
 
         let knowledgeItem = KnowledgeItem.draft(from: organizationRequest, profile: profile, state: .active)
         let captureEvent = CaptureEvent(
@@ -236,8 +364,18 @@ public final class DefaultColdStartScanner: ColdStartScanner, @unchecked Sendabl
         try await knowledgeStore.upsertKnowledgeItem(knowledgeItem)
         try await knowledgeStore.appendCaptureEvent(captureEvent)
         try await knowledgeStore.upsertRelationship(relationship)
-        try await searchService?.index(makeIndexedItem(from: profile, request: organizationRequest, permissionRecord: permissionRecord))
-        await embedItem(profile)
+        try await searchService?.index(
+            makeIndexedItem(from: profile, request: organizationRequest,
+                            permissionRecord: permissionRecord, unitTags: candidate.tags,
+                            contentFingerprint: candidate.fingerprint))
+        if !candidate.skipEmbed {
+            if replacesExisting, let embedder, let vectorIndex {
+                // Content changed: drop the stale vector so backfill re-embeds
+                // even if the embedder isn't ready right now.
+                try? await vectorIndex.deleteVector(itemID: profile.id, modelID: embedder.modelID)
+            }
+            await embedItem(profile)
+        }
         if !profile.metadata.isEmpty {
             try await knowledgeStore.upsertMetadataSnapshot(
                 itemID: profile.id,
@@ -277,8 +415,14 @@ public final class DefaultColdStartScanner: ColdStartScanner, @unchecked Sendabl
 
     /// Embed a context entity (folder / project) under a separate model namespace
     /// so it can label semantic clusters without polluting item clustering.
+    /// Idempotent: rescans skip entities that already carry a vector.
     private func embedEntity(_ context: ContextNode) async {
         guard let embedder, let vectorIndex else { return }
+        let entityModel = VectorModel.entity(embedder.modelID)
+        if let existing = try? await vectorIndex.vectors(modelID: entityModel),
+           existing.contains(where: { $0.itemID == context.id }) {
+            return
+        }
         guard let vector = await embedder.embed(context.name) else { return }
         try? await vectorIndex.upsertVector(
             VectorRecord(itemID: context.id, modelID: VectorModel.entity(embedder.modelID), vector: vector)
@@ -288,9 +432,11 @@ public final class DefaultColdStartScanner: ColdStartScanner, @unchecked Sendabl
     private func makeIndexedItem(
         from item: ItemProfile,
         request: OrganizationRequest,
-        permissionRecord: PermissionRecord
+        permissionRecord: PermissionRecord,
+        unitTags: [String] = [],
+        contentFingerprint: String? = nil
     ) -> IndexedItem {
-        var tags = item.finderTags
+        var tags = item.finderTags + unitTags
         if let captureLocation = permissionRecord.metadata["captureLocation"] {
             tags.append(captureLocation)
         }
@@ -323,7 +469,8 @@ public final class DefaultColdStartScanner: ColdStartScanner, @unchecked Sendabl
             tags: Array(Set(tags)).sorted(),
             extractedText: item.extractedTextSummary ?? item.metadata["text.content"],
             aiSummary: "Indexed in place from \(permissionRecord.url.lastPathComponent).",
-            status: .indexedOnly
+            status: .indexedOnly,
+            contentFingerprint: contentFingerprint
         )
     }
 
@@ -374,6 +521,12 @@ public final class DefaultColdStartScanner: ColdStartScanner, @unchecked Sendabl
             return .watchedFolder
         }
         return .existingLibraryScan
+    }
+
+    /// The stable, path-derived item id — also used by scanCandidates to tag
+    /// collection members with their collection's item id.
+    static func itemID(for url: URL) -> UUID {
+        stableUUID("knowledge-item:\(url.standardizedFileURL.path)")
     }
 
     private static func stableUUID(_ input: String) -> UUID {

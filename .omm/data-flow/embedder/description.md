@@ -1,0 +1,1 @@
+MLXTextEmbedder (Qwen3-Embedding-0.6B-4bit-DWQ, dim 1024, in-process Metal). Cross-lingual: EN<->JP cosine ~0.81 on paraphrases, which is what makes the multilingual corpus cluster correctly. Returns nil until provisioned. Headless contexts use NLEmbeddingTextEmbedder instead (same port).

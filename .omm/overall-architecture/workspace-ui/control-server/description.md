@@ -1,0 +1,1 @@
+WorkspaceControlServer.swift — DEBUG-only localhost HTTP server (BIPBOX_CONTROL_API=1, BIPBOX_CONTROL_PORT) exposing /health and /command (addFolder, select, snapshot, ...). UI tests use it to seed deterministic state without flaky UI-driven setup; WorkspaceControl.swift maps commands onto WorkspaceModel.

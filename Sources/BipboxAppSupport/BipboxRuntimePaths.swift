@@ -60,6 +60,16 @@ public struct BipboxRuntimePaths: Equatable {
         dataDirectoryURL.appendingPathComponent("Vectors", isDirectory: true)
     }
 
+    public var modelsDirectoryURL: URL {
+        dataDirectoryURL.appendingPathComponent("Models", isDirectory: true)
+    }
+
+    /// Marker written once the embedding model has finished downloading, so the app
+    /// can show a one-time download prompt on first start (no silent surprise).
+    public var embedderMarkerURL: URL {
+        modelsDirectoryURL.appendingPathComponent("embedder.downloaded", isDirectory: false)
+    }
+
     public var defaultLibraryRootURL: URL {
         baseDirectoryURL.appendingPathComponent("Library", isDirectory: true)
     }
@@ -79,6 +89,7 @@ public struct BipboxRuntimePaths: Equatable {
             settingsDirectoryURL,
             sourcesDirectoryURL,
             vectorIndexDirectoryURL,
+            modelsDirectoryURL,
             defaultLibraryRootURL,
             defaultInboxURL
         ] {

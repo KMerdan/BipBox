@@ -1,0 +1,1 @@
+Never add an outer-ring import to BipboxCore — new OS or model capabilities enter as a protocol port in Core plus an implementation in the right outer target. project.yml must list product: BipboxMLX under the Bipbox app target so xcodebuild bundles the metallib. Macro validation: pass -skipMacroValidation to headless xcodebuild (mlx-swift uses macros).

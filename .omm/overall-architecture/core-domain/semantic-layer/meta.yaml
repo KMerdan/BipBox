@@ -1,0 +1,9 @@
+created: 2026-06-11T08:00:26.628Z
+updated: 2026-06-11T08:00:26.628Z
+update_count: 1
+last_field: description
+kind: nested-class
+title: semantic-layer
+children: []
+parentPath:
+  - core-domain
