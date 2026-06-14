@@ -9,6 +9,7 @@ import XCTest
 @MainActor
 final class AppShellUITests: XCTestCase {
     private var dataDir: URL!
+    private var launchedApp: XCUIApplication?
 
     override func setUp() async throws {
         continueAfterFailure = false
@@ -18,6 +19,9 @@ final class AppShellUITests: XCTestCase {
     }
 
     override func tearDown() async throws {
+        launchedApp?.terminate()
+        launchedApp = nil
+        try? await Task.sleep(nanoseconds: 400_000_000)
         try? FileManager.default.removeItem(at: dataDir)
     }
 
@@ -25,6 +29,7 @@ final class AppShellUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["BIPBOX_DATA_DIR"] = dataDir.path
         for (k, v) in extraEnv { app.launchEnvironment[k] = v }
+        launchedApp = app
         return app
     }
 

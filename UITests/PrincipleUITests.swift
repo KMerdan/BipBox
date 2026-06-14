@@ -10,6 +10,7 @@ import XCTest
 final class PrincipleUITests: XCTestCase {
     private var dataDir: URL!
     private var seedDir: URL!
+    private var runningApp: XCUIApplication?
     private let port = Int.random(in: 8200...8999)
 
     override func setUp() async throws {
@@ -25,6 +26,9 @@ final class PrincipleUITests: XCTestCase {
     }
 
     override func tearDown() async throws {
+        runningApp?.terminate()
+        runningApp = nil
+        try? await Task.sleep(nanoseconds: 400_000_000)
         try? FileManager.default.removeItem(at: dataDir)
         try? FileManager.default.removeItem(at: seedDir)
     }
@@ -37,6 +41,7 @@ final class PrincipleUITests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.buttons["sidebar.allItems"].waitForExistence(timeout: 20))
         XCTAssertTrue(waitForControlAPI(), "Control API should come up")
+        runningApp = app
         return app
     }
 
@@ -83,7 +88,11 @@ final class PrincipleUITests: XCTestCase {
         let search = app.textFields["toolbar.search"]
         XCTAssertTrue(search.waitForExistence(timeout: 10))
         search.click(); search.typeText("report\r")
-        XCTAssertTrue(app.staticTexts["report.pdf"].waitForExistence(timeout: 10), "Search surfaces the item")
+        // The result row is a Button whose children SwiftUI may merge into the
+        // label, so match the rendered result by label rather than a bare text.
+        let hit = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@", "report.pdf")).firstMatch
+        XCTAssertTrue(hit.waitForExistence(timeout: 10), "Search surfaces the item")
     }
 
     // MARK: Automation is policy — Inbox is the visible fallback; decisions are explicit

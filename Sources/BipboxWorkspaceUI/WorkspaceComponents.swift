@@ -131,30 +131,61 @@ extension CenterHeader where Accessory == EmptyView {
 
 // MARK: Inspector shared pieces
 
-@MainActor
-func inspHead(_ trailingOnly: Bool = false) -> some View {
-    HStack(spacing: 6) {
-        if !trailingOnly {
-            ForEach(["arrow.up.forward.square", "folder", "link"], id: \.self) { InspIcon(symbol: $0) }
+/// The inspector header. Leading icons (open / reveal / copy path) act on the
+/// current selection's on-disk target; the trailing ⋯ menu mirrors them. Icons
+/// that have nothing to act on are disabled rather than dead-on-click.
+struct InspectorHeader: View {
+    @EnvironmentObject var model: WorkspaceModel
+    var trailingOnly: Bool = false
+
+    var body: some View {
+        let url = model.inspectorTargetURL
+        HStack(spacing: 6) {
+            if !trailingOnly {
+                InspIcon(symbol: "arrow.up.forward.square", help: "Open", enabled: url != nil) {
+                    model.openSelectionExternally()
+                }.accessibilityIdentifier("inspector.open")
+                InspIcon(symbol: "folder", help: "Reveal in Finder", enabled: url != nil) {
+                    model.revealSelectionInFinder()
+                }.accessibilityIdentifier("inspector.reveal")
+                InspIcon(symbol: "link", help: "Copy path", enabled: url != nil) {
+                    model.copySelectionPath()
+                }.accessibilityIdentifier("inspector.copyPath")
+            }
+            Spacer()
+            Menu {
+                Button("Open") { model.openSelectionExternally() }.disabled(url == nil)
+                Button("Reveal in Finder") { model.revealSelectionInFinder() }.disabled(url == nil)
+                Button("Copy Path") { model.copySelectionPath() }.disabled(url == nil)
+            } label: {
+                Image(systemName: "ellipsis").font(.system(size: 14)).foregroundStyle(BB.ink2)
+                    .frame(width: 30, height: 30)
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(BB.hairStrong, lineWidth: 0.5))
+            }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .accessibilityIdentifier("inspector.more")
         }
-        Spacer()
-        InspIcon(symbol: "ellipsis")
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .overlay(alignment: .bottom) { Divider().overlay(BB.hair) }
     }
-    .padding(.horizontal, 14).padding(.vertical, 10)
-    .overlay(alignment: .bottom) { Divider().overlay(BB.hair) }
 }
 
 struct InspIcon: View {
     let symbol: String
+    var help: String = ""
+    var enabled: Bool = true
     var action: (() -> Void)? = nil
     @State private var hover = false
     var body: some View {
         Button { action?() } label: {
-            Image(systemName: symbol).font(.system(size: 14)).foregroundStyle(hover ? BB.ink : BB.ink2)
+            Image(systemName: symbol).font(.system(size: 14))
+                .foregroundStyle(enabled ? (hover ? BB.ink : BB.ink2) : BB.ink3)
                 .frame(width: 30, height: 30)
-                .background(hover ? BB.rowHover : .clear, in: RoundedRectangle(cornerRadius: 8))
+                .background(hover && enabled ? BB.rowHover : .clear, in: RoundedRectangle(cornerRadius: 8))
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(BB.hairStrong, lineWidth: 0.5))
-        }.buttonStyle(.plain).onHover { hover = $0 }
+        }
+        .buttonStyle(.plain).disabled(!enabled).onHover { hover = $0 }
+        .help(help)
     }
 }
 

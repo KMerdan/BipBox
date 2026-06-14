@@ -9,6 +9,7 @@ import XCTest
 final class ConnectionsGraphUITests: XCTestCase {
     private var dataDir: URL!
     private var seedDir: URL!
+    private var runningApp: XCUIApplication?
     // Unique per test instance — avoids a still-releasing prior app shadowing the next.
     private let port = Int.random(in: 8200...8999)
 
@@ -27,6 +28,9 @@ final class ConnectionsGraphUITests: XCTestCase {
     }
 
     override func tearDown() async throws {
+        runningApp?.terminate()
+        runningApp = nil
+        try? await Task.sleep(nanoseconds: 400_000_000)
         try? FileManager.default.removeItem(at: dataDir)
         try? FileManager.default.removeItem(at: seedDir)
     }
@@ -46,6 +50,7 @@ final class ConnectionsGraphUITests: XCTestCase {
         command(["action": "addFolder", "path": seedDir.path, "depth": "all"])
         app.buttons["toolbar.toggle.connections"].click()
         selectLens(lens, in: app)
+        runningApp = app
         return app
     }
 

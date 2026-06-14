@@ -33,7 +33,7 @@ struct ItemInspector: View {
     let item: IndexedItem
     var body: some View {
         VStack(spacing: 0) {
-            inspHead()
+            InspectorHeader()
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     VStack(spacing: 12) {
@@ -181,7 +181,7 @@ struct NodeInspector: View {
         let meta = model.nodeMeta(selection)
         let members = model.nodeMembers(selection)
         VStack(spacing: 0) {
-            inspHead(true)
+            InspectorHeader(trailingOnly: true)
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     if let meta {
@@ -240,7 +240,7 @@ struct OverviewInspector: View {
     var body: some View {
         let clusters = model.clusters
         VStack(spacing: 0) {
-            inspHead(true)
+            InspectorHeader(trailingOnly: true)
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     InspSection(title: "Overview") {
@@ -277,7 +277,7 @@ struct RuleInspector: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            inspHead(true)
+            InspectorHeader(trailingOnly: true)
             ScrollView { VStack(alignment: .leading, spacing: 0) {
                 InspSection(title: "Rule") {
                     TextField("Rule name", text: $draftName)
@@ -336,7 +336,7 @@ struct ActivityInspector: View {
     let event: ActivityEvent
     var body: some View {
         VStack(spacing: 0) {
-            inspHead(true)
+            InspectorHeader(trailingOnly: true)
             ScrollView { VStack(alignment: .leading, spacing: 0) {
                 InspSection(title: event.kind.rawValue) { Text(event.message).font(BB.head()).foregroundStyle(BB.ink) }
                 InspSection(title: "") { VStack(spacing: 0) {

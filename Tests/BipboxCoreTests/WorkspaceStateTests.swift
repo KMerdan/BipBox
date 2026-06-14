@@ -41,6 +41,45 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertEqual(model.section, .activity)
     }
 
+    func testBackForwardHistoryAndSidebarToggle() {
+        let a = UUID(), b = UUID()
+        let model = makeModel()
+        XCTAssertFalse(model.canGoBack)
+        XCTAssertFalse(model.canGoForward)
+
+        model.select(.item(a))
+        model.select(.item(b))
+        XCTAssertTrue(model.canGoBack)
+
+        model.goBack()
+        XCTAssertEqual(model.selection, .item(a))
+        XCTAssertTrue(model.canGoForward)
+
+        model.goForward()
+        XCTAssertEqual(model.selection, .item(b))
+        XCTAssertFalse(model.canGoForward)
+
+        // Selecting the same node again is a no-op (no bogus history entries).
+        let depthBefore = { () -> Bool in model.select(.item(b)); return model.canGoForward }()
+        XCTAssertFalse(depthBefore, "re-selecting current must not change history")
+
+        XCTAssertTrue(model.sidebarVisible)
+        model.toggleSidebar()
+        XCTAssertFalse(model.sidebarVisible)
+    }
+
+    func testInspectorTargetURLResolvesItemPath() async {
+        let id = UUID()
+        let item = IndexedItem(id: id, currentPath: "/tmp/demo/report.pdf", displayName: "report.pdf",
+                               kind: .file, importedAt: Date(), status: .indexedOnly)
+        let model = await makeModel(items: [item])
+        model.select(.item(id))
+        XCTAssertEqual(model.inspectorTargetURL?.path, "/tmp/demo/report.pdf")
+
+        model.select(.overview)
+        XCTAssertNil(model.inspectorTargetURL, "overview has no file-backed target")
+    }
+
     func testLibraryLikeClassification() {
         XCTAssertTrue(WorkspaceNav.allItems.isLibraryLike)
         XCTAssertTrue(WorkspaceNav.recents.isLibraryLike)

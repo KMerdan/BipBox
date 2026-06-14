@@ -62,8 +62,11 @@ public struct WorkspaceRootView: View {
 
     public var body: some View {
         HStack(spacing: 0) {
-            SidebarView(onOpenSettings: openSettings)
-                .frame(width: 252)
+            if model.sidebarVisible {
+                SidebarView(onOpenSettings: openSettings)
+                    .frame(width: 252)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+            }
 
             VStack(spacing: 0) {
                 WorkspaceToolbar(appearance: $appearance)
@@ -145,9 +148,12 @@ private struct WorkspaceToolbar: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            ForEach(["sidebar.left", "chevron.left", "chevron.right"], id: \.self) { s in
-                ToolbarButton(symbol: s) {}
-            }
+            ToolbarButton(symbol: "sidebar.left") { withAnimation(.easeOut(duration: 0.18)) { model.toggleSidebar() } }
+                .accessibilityIdentifier("toolbar.toggleSidebar")
+            ToolbarButton(symbol: "chevron.left", enabled: model.canGoBack) { model.goBack() }
+                .accessibilityIdentifier("toolbar.back")
+            ToolbarButton(symbol: "chevron.right", enabled: model.canGoForward) { model.goForward() }
+                .accessibilityIdentifier("toolbar.forward")
             searchField
             Spacer(minLength: 8)
             if model.presentation == .connections && !model.isSearching && model.section.isLibraryLike { groupByMenu }
@@ -221,14 +227,16 @@ private struct WorkspaceToolbar: View {
 
 struct ToolbarButton: View {
     let symbol: String
+    var enabled: Bool = true
     let action: () -> Void
     @State private var hover = false
     var body: some View {
         Button(action: action) {
-            Image(systemName: symbol).font(.system(size: 15)).foregroundStyle(hover ? BB.ink : BB.ink2)
+            Image(systemName: symbol).font(.system(size: 15))
+                .foregroundStyle(enabled ? (hover ? BB.ink : BB.ink2) : BB.ink3)
                 .frame(width: 28, height: 28)
-                .background(hover ? BB.rowHover : .clear, in: RoundedRectangle(cornerRadius: 7))
-        }.buttonStyle(.plain).onHover { hover = $0 }
+                .background(hover && enabled ? BB.rowHover : .clear, in: RoundedRectangle(cornerRadius: 7))
+        }.buttonStyle(.plain).disabled(!enabled).onHover { hover = $0 }
     }
 }
 

@@ -8,6 +8,7 @@ import XCTest
 @MainActor
 final class ProvisioningUITests: XCTestCase {
     private var dataDir: URL!
+    private var launchedApp: XCUIApplication?
     private let port = Int.random(in: 8200...8999)
 
     override func setUp() async throws {
@@ -18,11 +19,15 @@ final class ProvisioningUITests: XCTestCase {
     }
 
     override func tearDown() async throws {
+        launchedApp?.terminate()
+        launchedApp = nil
+        try? await Task.sleep(nanoseconds: 400_000_000)
         try? FileManager.default.removeItem(at: dataDir)
     }
 
     private func launch(provisioning: String) -> XCUIApplication {
         let app = XCUIApplication()
+        launchedApp = app
         app.launchEnvironment["BIPBOX_DATA_DIR"] = dataDir.path
         app.launchEnvironment["BIPBOX_FAKE_PROVISIONING"] = provisioning
         app.launchEnvironment["BIPBOX_CONTROL_API"] = "1"

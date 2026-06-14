@@ -146,7 +146,44 @@ public final class WorkspaceModel: ObservableObject {
     }
 
     func item(_ id: UUID) -> IndexedItem? {
+        // Resolve from the current library page first, then fall back to the
+        // related/overview caches so selecting a Related row whose item isn't on
+        // the current page still opens a real inspector (not the empty state).
         library.results.first { $0.id == id }
+            ?? library.relatedItems.first { $0.item.id == id }?.item
+    }
+
+    // MARK: inspector target (open / reveal / copy for the current selection)
+
+    /// The on-disk URL the inspector header acts on for the current selection:
+    /// an item's path, or a watched source's folder. Nil when there's nothing
+    /// file-backed to act on (overview, rules, activity, …).
+    public var inspectorTargetURL: URL? {
+        switch selection {
+        case .item(let id):
+            return item(id).map { URL(fileURLWithPath: $0.currentPath) }
+        case .source(let id):
+            return sources.first { $0.id == id }?.url
+        default:
+            return nil
+        }
+    }
+
+    func openSelectionExternally() {
+        guard let url = inspectorTargetURL else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    func revealSelectionInFinder() {
+        guard let url = inspectorTargetURL else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    func copySelectionPath() {
+        guard let url = inspectorTargetURL else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(url.path, forType: .string)
+        flash("Copied path")
     }
 
     // MARK: navigation
@@ -181,7 +218,35 @@ public final class WorkspaceModel: ObservableObject {
     }
 
     public func select(_ s: Selection) {
+        guard s != selection else { return }
+        backStack.append(selection)
+        if backStack.count > 50 { backStack.removeFirst() }
+        forwardStack.removeAll()
         selection = s
+    }
+
+    // MARK: back / forward history + sidebar toggle (toolbar chrome)
+
+    @Published public var sidebarVisible = true
+    private var backStack: [Selection] = []
+    private var forwardStack: [Selection] = []
+    public var canGoBack: Bool { !backStack.isEmpty }
+    public var canGoForward: Bool { !forwardStack.isEmpty }
+
+    public func goBack() {
+        guard let previous = backStack.popLast() else { return }
+        forwardStack.append(selection)
+        selection = previous
+    }
+
+    public func goForward() {
+        guard let next = forwardStack.popLast() else { return }
+        backStack.append(selection)
+        selection = next
+    }
+
+    public func toggleSidebar() {
+        sidebarVisible.toggle()
     }
 
     // MARK: decisions (route through the real review queue)

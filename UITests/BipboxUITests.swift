@@ -11,6 +11,7 @@ import XCTest
 final class BipboxUITests: XCTestCase {
     private var dataDir: URL!
     private var seedDir: URL!
+    private var runningApp: XCUIApplication?
     private let port = Int.random(in: 8200...8999)
 
     override func setUp() async throws {
@@ -26,6 +27,9 @@ final class BipboxUITests: XCTestCase {
     }
 
     override func tearDown() async throws {
+        runningApp?.terminate()
+        runningApp = nil
+        try? await Task.sleep(nanoseconds: 400_000_000)
         try? FileManager.default.removeItem(at: dataDir)
         try? FileManager.default.removeItem(at: seedDir)
     }
@@ -40,6 +44,7 @@ final class BipboxUITests: XCTestCase {
         XCTAssertTrue(app.buttons["sidebar.allItems"].waitForExistence(timeout: 20), "Workspace should render")
         XCTAssertTrue(waitForControlAPI(), "Control API should come up")
         if seed { seedFolder() }
+        runningApp = app
         return app
     }
 
@@ -81,7 +86,11 @@ final class BipboxUITests: XCTestCase {
         search.click()
         search.typeText("report\r")
 
-        XCTAssertTrue(app.staticTexts["report.pdf"].waitForExistence(timeout: 10),
+        // The result row is a Button whose children SwiftUI may merge into the
+        // label, so match the rendered result by label rather than a bare text.
+        let hit = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@", "report.pdf")).firstMatch
+        XCTAssertTrue(hit.waitForExistence(timeout: 10),
                       "Search should surface the seeded report.pdf")
     }
 

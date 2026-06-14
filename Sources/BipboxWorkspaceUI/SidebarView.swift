@@ -58,9 +58,14 @@ struct SidebarView: View {
                     Text("Assistant ready · local").font(.system(size: 12)).foregroundStyle(BB.ink2)
                 }
                 Spacer()
-                Button(action: onOpenSettings) {
+                // SettingsLink opens the `Settings { }` scene directly — the
+                // older `showSettingsWindow:` selector no longer fires on current
+                // macOS, which is why the gear appeared dead.
+                SettingsLink {
                     Image(systemName: "gearshape").font(.system(size: 14)).foregroundStyle(BB.ink3)
-                }.buttonStyle(.plain)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("sidebar.settings")
             }
             .padding(.horizontal, 16).padding(.vertical, 10)
         }
