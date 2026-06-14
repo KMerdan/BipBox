@@ -4,137 +4,109 @@ import XCTest
 
 @MainActor
 final class SettingsWorkspaceViewModelTests: XCTestCase {
-    func testSetsLibraryRootThroughPermissionStore() async throws {
-        let store = FixturePermissionStore()
-        let viewModel = SettingsWorkspaceViewModel(permissionStore: store)
-        let libraryURL = URL(fileURLWithPath: "/Bipbox", isDirectory: true)
 
-        await viewModel.setLibraryRoot(libraryURL, state: .granted)
-        let storedLibraryRoot = try await store.records(scope: .libraryRoot).first
+    func testWatchFoldersTogglePersistsAutomationState() async throws {
+        let store = FixtureAppSettingsStore()
+        let viewModel = SettingsWorkspaceViewModel(appSettingsStore: store)
+        XCTAssertTrue(viewModel.watchFoldersEnabled)
 
-        XCTAssertEqual(viewModel.libraryRoot?.url, libraryURL)
-        XCTAssertEqual(viewModel.libraryRoot?.scope, .libraryRoot)
-        XCTAssertEqual(storedLibraryRoot?.url, libraryURL)
+        await viewModel.setWatchFoldersEnabled(false)
+        XCTAssertFalse(viewModel.watchFoldersEnabled)
+        var persisted = try await store.load()
+        XCTAssertEqual(persisted.automationState, .paused)
+
+        await viewModel.setWatchFoldersEnabled(true)
+        persisted = try await store.load()
+        XCTAssertEqual(persisted.automationState, .running)
     }
 
-    func testPermissionErrorDisplay() async {
-        let viewModel = SettingsWorkspaceViewModel(permissionStore: ThrowingPermissionStore())
+    func testLoadAppliesPersistedAutomationState() async {
+        let store = FixtureAppSettingsStore(settings: AppSettings(automationState: .paused))
+        let viewModel = SettingsWorkspaceViewModel(appSettingsStore: store)
 
         await viewModel.load()
-
-        XCTAssertEqual(viewModel.errorMessage, SettingsViewModelTestError.permissionFailed.localizedDescription)
-        XCTAssertNil(viewModel.libraryRoot)
+        XCTAssertFalse(viewModel.watchFoldersEnabled)
     }
 
-    func testPauseAndResumeAutomation() async {
-        let viewModel = SettingsWorkspaceViewModel(permissionStore: FixturePermissionStore())
-
-        XCTAssertEqual(viewModel.automationState, .running)
-
-        await viewModel.pauseAutomation()
-        XCTAssertEqual(viewModel.automationState, .paused)
-
-        await viewModel.resumeAutomation()
-        XCTAssertEqual(viewModel.automationState, .running)
-    }
-
-    func testAIPrivacyDefaultsToOff() {
-        let viewModel = SettingsWorkspaceViewModel(permissionStore: FixturePermissionStore())
-
-        XCTAssertFalse(viewModel.aiContentSharingEnabled)
-        XCTAssertFalse(viewModel.aiEnabled)
-        XCTAssertEqual(viewModel.aiProvider, .none)
-        XCTAssertTrue(viewModel.aiLocalOnlyModeEnabled)
-        XCTAssertTrue(viewModel.aiMetadataOnlyModeEnabled)
-        XCTAssertTrue(viewModel.aiAuditLoggingEnabled)
-        XCTAssertFalse(viewModel.launchAtLoginEnabled)
-        XCTAssertEqual(
-            viewModel.aiPrivacySummary,
-            "AI is off. Tools remain available locally for future agent planning."
-        )
-    }
-
-    func testLoadsAndPersistsAppSettings() async throws {
-        let settingsStore = FixtureAppSettingsStore(
-            settings: AppSettings(
-                automationState: .paused,
-                launchAtLoginEnabled: true,
-                aiEnabled: true,
-                aiProvider: .openAI,
-                aiLocalOnlyModeEnabled: false,
-                aiContentSharingEnabled: false
-            )
-        )
+    func testLaunchAtLoginDrivesTheLoginItem() async {
+        let loginItem = FakeLoginItem(enabled: false)
         let viewModel = SettingsWorkspaceViewModel(
-            permissionStore: FixturePermissionStore(),
-            appSettingsStore: settingsStore
-        )
+            appSettingsStore: FixtureAppSettingsStore(), loginItem: loginItem)
+
+        await viewModel.setLaunchAtLoginEnabled(true)
+        XCTAssertTrue(loginItem.enabled)
+        XCTAssertTrue(viewModel.launchAtLoginEnabled)
+
+        await viewModel.setLaunchAtLoginEnabled(false)
+        XCTAssertFalse(loginItem.enabled)
+        XCTAssertFalse(viewModel.launchAtLoginEnabled)
+    }
+
+    func testLaunchAtLoginReflectsActualOSStateOnLoad() async {
+        // The login item — not AppSettings — is the source of truth: a stale
+        // persisted `true` must not override the OS reporting it as disabled.
+        let store = FixtureAppSettingsStore(settings: AppSettings(launchAtLoginEnabled: true))
+        let viewModel = SettingsWorkspaceViewModel(
+            appSettingsStore: store, loginItem: FakeLoginItem(enabled: false))
 
         await viewModel.load()
-        XCTAssertEqual(viewModel.automationState, .paused)
-        XCTAssertTrue(viewModel.launchAtLoginEnabled)
-        XCTAssertTrue(viewModel.aiEnabled)
-        XCTAssertEqual(viewModel.aiProvider, .openAI)
-        XCTAssertFalse(viewModel.aiLocalOnlyModeEnabled)
-        XCTAssertFalse(viewModel.aiContentSharingEnabled)
+        XCTAssertFalse(viewModel.launchAtLoginEnabled)
+    }
 
-        await viewModel.setAIContentSharingEnabled(true)
-        await viewModel.setAIAuditLoggingEnabled(false)
-        await viewModel.setLaunchAtLoginEnabled(false)
+    func testLaunchAtLoginSurfacesLoginItemError() async {
+        let viewModel = SettingsWorkspaceViewModel(
+            appSettingsStore: FixtureAppSettingsStore(), loginItem: ThrowingLoginItem())
 
-        let persisted = try await settingsStore.load()
-        XCTAssertTrue(persisted.aiEnabled)
+        await viewModel.setLaunchAtLoginEnabled(true)
+        XCTAssertNotNil(viewModel.errorMessage)
+        XCTAssertFalse(viewModel.launchAtLoginEnabled)
+    }
+
+    func testSavePreservesUnmanagedAISettings() async throws {
+        // Settings no longer exposes AI, but must not clobber persisted AI config.
+        let store = FixtureAppSettingsStore(settings: AppSettings(
+            automationState: .running, aiEnabled: true, aiProvider: .openAI,
+            aiLocalOnlyModeEnabled: false))
+        let viewModel = SettingsWorkspaceViewModel(appSettingsStore: store)
+
+        await viewModel.setWatchFoldersEnabled(false)
+
+        let persisted = try await store.load()
+        XCTAssertEqual(persisted.automationState, .paused, "the managed field changed")
+        XCTAssertTrue(persisted.aiEnabled, "unmanaged AI fields preserved")
         XCTAssertEqual(persisted.aiProvider, .openAI)
         XCTAssertFalse(persisted.aiLocalOnlyModeEnabled)
-        XCTAssertTrue(persisted.aiContentSharingEnabled)
-        XCTAssertFalse(persisted.aiMetadataOnlyModeEnabled)
-        XCTAssertFalse(persisted.aiAuditLoggingEnabled)
-        XCTAssertFalse(persisted.launchAtLoginEnabled)
-        XCTAssertEqual(persisted.automationState, .paused)
     }
 
-    func testPermissionHealthSummaryShowsIssues() async {
-        let viewModel = SettingsWorkspaceViewModel(permissionStore: FixturePermissionStore())
-
-        XCTAssertEqual(viewModel.permissionHealthSummary, "No library storage folder configured.")
-        XCTAssertEqual(
-            viewModel.permissionHealthActionHint,
-            "Use Library to choose storage; use Start to add remembered source folders."
-        )
-
-        await viewModel.setLibraryRoot(URL(fileURLWithPath: "/Bipbox", isDirectory: true), state: .granted)
-
-        XCTAssertEqual(viewModel.permissionHealthSummary, "All permissions healthy.")
-        XCTAssertEqual(
-            viewModel.permissionHealthActionHint,
-            "Source permissions are managed from Start. Missing files are recovered from Library."
-        )
+    func testLoadSurfacesStoreError() async {
+        let viewModel = SettingsWorkspaceViewModel(appSettingsStore: ThrowingAppSettingsStore())
+        await viewModel.load()
+        XCTAssertNotNil(viewModel.errorMessage)
     }
 
-    func testDiagnosticsSummaryPointsToActivityAuditTrail() {
-        let viewModel = SettingsWorkspaceViewModel(permissionStore: FixturePermissionStore())
-
-        XCTAssertEqual(
-            viewModel.diagnosticsSummary,
-            "Activity contains the audit trail for capture, indexing, decisions, filesystem operations, and tool calls."
-        )
+    func testExposesDataDirectory() {
+        let dir = URL(fileURLWithPath: "/tmp/bipbox-data", isDirectory: true)
+        let viewModel = SettingsWorkspaceViewModel(
+            appSettingsStore: FixtureAppSettingsStore(), dataDirectoryURL: dir)
+        XCTAssertEqual(viewModel.dataDirectoryURL, dir)
     }
 }
 
-private enum SettingsViewModelTestError: Error {
-    case permissionFailed
+private final class FakeLoginItem: LoginItemControlling, @unchecked Sendable {
+    var enabled: Bool
+    init(enabled: Bool) { self.enabled = enabled }
+    func isEnabled() -> Bool { enabled }
+    func setEnabled(_ enabled: Bool) throws { self.enabled = enabled }
 }
 
-private actor ThrowingPermissionStore: PermissionStore {
-    func save(_ record: PermissionRecord) async throws {
-        throw SettingsViewModelTestError.permissionFailed
-    }
+private struct ThrowingLoginItem: LoginItemControlling {
+    struct Failure: Error {}
+    func isEnabled() -> Bool { false }
+    func setEnabled(_ enabled: Bool) throws { throw Failure() }
+}
 
-    func remove(id: UUID) async throws {
-        throw SettingsViewModelTestError.permissionFailed
-    }
-
-    func records(scope: PermissionScope?) async throws -> [PermissionRecord] {
-        throw SettingsViewModelTestError.permissionFailed
-    }
+private actor ThrowingAppSettingsStore: AppSettingsStore {
+    struct Failure: Error {}
+    func load() async throws -> AppSettings { throw Failure() }
+    func save(_ settings: AppSettings) async throws { throw Failure() }
 }

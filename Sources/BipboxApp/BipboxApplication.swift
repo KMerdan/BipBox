@@ -306,8 +306,8 @@ private final class BipboxApplicationModel: ObservableObject {
                     undoExecutor: BipboxActivityUndoExecutor(executor: services.executor)
                 ),
                 settings: SettingsWorkspaceViewModel(
-                    permissionStore: services.permissionStore,
-                    appSettingsStore: services.appSettingsStore
+                    appSettingsStore: services.appSettingsStore,
+                    dataDirectoryURL: services.paths.dataDirectoryURL
                 )
             )
             let model = WorkspaceModel(
@@ -630,7 +630,7 @@ struct BipboxApplication: App {
     var body: some Scene {
         Settings {
             SettingsWorkspaceView(viewModel: appDelegate.settingsViewModel)
-                .frame(minWidth: 460, minHeight: 420)
+                .frame(width: 480, height: 560)
         }
     }
 }

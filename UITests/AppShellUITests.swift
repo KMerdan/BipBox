@@ -48,8 +48,8 @@ final class AppShellUITests: XCTestCase {
             app.typeKey(",", modifierFlags: .command)
         }
 
-        let aiToggle = app.descendants(matching: .any)["settings.aiEnabled"]
-        XCTAssertTrue(aiToggle.waitForExistence(timeout: 10) || app.staticTexts["Enable AI agent"].waitForExistence(timeout: 5),
+        let watchToggle = app.descendants(matching: .any)["settings.watchFolders"]
+        XCTAssertTrue(watchToggle.waitForExistence(timeout: 10) || app.staticTexts["Watch folders for new files"].waitForExistence(timeout: 5),
                       "Settings window should render the preferences form")
     }
 

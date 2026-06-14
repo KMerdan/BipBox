@@ -181,8 +181,8 @@ public final class BipboxHarness {
                 undoExecutor: HarnessUndoExecutor(executor: services.executor)
             ),
             settings: SettingsWorkspaceViewModel(
-                permissionStore: services.permissionStore,
-                appSettingsStore: services.appSettingsStore
+                appSettingsStore: services.appSettingsStore,
+                dataDirectoryURL: services.paths.dataDirectoryURL
             )
         )
     }

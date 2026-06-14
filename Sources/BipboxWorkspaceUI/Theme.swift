@@ -102,3 +102,25 @@ public struct DotChip: View {
         .foregroundStyle(BB.ink2)
     }
 }
+
+/// The user's appearance preference (global config, persisted via @AppStorage
+/// under "bipbox.appearance"). `nil` colorScheme means "follow the system".
+public enum AppAppearance: String, CaseIterable, Identifiable, Sendable {
+    case system, light, dark
+    public var id: String { rawValue }
+    public var title: String {
+        switch self {
+        case .system: "System"
+        case .light: "Light"
+        case .dark: "Dark"
+        }
+    }
+    public var colorScheme: ColorScheme? {
+        switch self {
+        case .system: nil
+        case .light: .light
+        case .dark: .dark
+        }
+    }
+    public static let storageKey = "bipbox.appearance"
+}

@@ -31,7 +31,9 @@ public struct WorkspaceViewModels {
 /// CENTER + INSPECTOR *content* swap on navigation; column widths never change.
 public struct WorkspaceRootView: View {
     @StateObject private var model: WorkspaceModel
-    @State private var appearance: ColorScheme? = nil
+    // Persisted global appearance preference, shared with Settings via @AppStorage.
+    @AppStorage(AppAppearance.storageKey) private var appearanceRaw = AppAppearance.system.rawValue
+    private var appearance: AppAppearance { AppAppearance(rawValue: appearanceRaw) ?? .system }
     @State private var isDropTargeted = false
     /// Opens the macOS Settings scene (wired by the app; Cmd+, also works).
     private let openSettings: () -> Void
@@ -69,7 +71,7 @@ public struct WorkspaceRootView: View {
             }
 
             VStack(spacing: 0) {
-                WorkspaceToolbar(appearance: $appearance)
+                WorkspaceToolbar(appearanceRaw: $appearanceRaw)
                 Divider().overlay(BB.hair)
                 HStack(spacing: 0) {
                     CenterColumn()
@@ -84,7 +86,7 @@ public struct WorkspaceRootView: View {
         }
         .frame(minWidth: 1040, minHeight: 680)
         .environmentObject(model)
-        .preferredColorScheme(appearance)
+        .preferredColorScheme(appearance.colorScheme)
         .task { await model.loadInitial() }
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
             loadDroppedURLs(providers)
@@ -143,7 +145,7 @@ private final class DroppedURLBox: @unchecked Sendable {
 
 private struct WorkspaceToolbar: View {
     @EnvironmentObject var model: WorkspaceModel
-    @Binding var appearance: ColorScheme?
+    @Binding var appearanceRaw: String
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
@@ -158,8 +160,9 @@ private struct WorkspaceToolbar: View {
             Spacer(minLength: 8)
             if model.presentation == .connections && !model.isSearching && model.section.isLibraryLike { groupByMenu }
             if model.section.isLibraryLike || model.isSearching { viewToggle }
-            ToolbarButton(symbol: (appearance ?? scheme) == .dark ? "sun.max" : "moon") {
-                appearance = (appearance ?? scheme) == .dark ? .light : .dark
+            let effectiveDark = (AppAppearance(rawValue: appearanceRaw)?.colorScheme ?? scheme) == .dark
+            ToolbarButton(symbol: effectiveDark ? "sun.max" : "moon") {
+                appearanceRaw = (effectiveDark ? AppAppearance.light : .dark).rawValue
             }
         }
         .padding(.horizontal, 14)

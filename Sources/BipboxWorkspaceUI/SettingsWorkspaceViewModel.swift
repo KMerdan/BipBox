@@ -1,235 +1,106 @@
 import BipboxCore
 import Foundation
+#if canImport(ServiceManagement)
+import ServiceManagement
+#endif
 
+/// Controls the macOS "launch at login" item. Abstracted behind a protocol so the
+/// view model stays testable — the real implementation needs a signed app bundle.
+public protocol LoginItemControlling: Sendable {
+    func isEnabled() -> Bool
+    func setEnabled(_ enabled: Bool) throws
+}
+
+/// Real login-item control via ServiceManagement (`SMAppService.mainApp`).
+public struct SMAppServiceLoginItem: LoginItemControlling {
+    public init() {}
+    public func isEnabled() -> Bool {
+        #if canImport(ServiceManagement)
+        return SMAppService.mainApp.status == .enabled
+        #else
+        return false
+        #endif
+    }
+    public func setEnabled(_ enabled: Bool) throws {
+        #if canImport(ServiceManagement)
+        if enabled { try SMAppService.mainApp.register() }
+        else { try SMAppService.mainApp.unregister() }
+        #endif
+    }
+}
+
+/// Settings is a GLOBAL-CONFIG surface only — no runtime status or actions.
+/// (Model provisioning lives in the startup banner; re-indexing lives in Sources.)
 @MainActor
 public final class SettingsWorkspaceViewModel: ObservableObject {
-    @Published public private(set) var libraryRoot: PermissionRecord?
-    @Published public private(set) var automationState: AutomationState
+    @Published public private(set) var watchFoldersEnabled: Bool
     @Published public private(set) var launchAtLoginEnabled: Bool
-    @Published public private(set) var aiEnabled: Bool
-    @Published public private(set) var aiProvider: AIProviderKind
-    @Published public private(set) var aiLocalOnlyModeEnabled: Bool
-    @Published public private(set) var aiContentSharingEnabled: Bool
-    @Published public private(set) var aiMetadataOnlyModeEnabled: Bool
-    @Published public private(set) var aiAuditLoggingEnabled: Bool
     @Published public private(set) var errorMessage: String?
     @Published public private(set) var isLoading: Bool
 
-    private let permissionStore: PermissionStore
+    /// Where Bipbox keeps its on-device index (shown read-only).
+    public let dataDirectoryURL: URL?
+
     private let appSettingsStore: AppSettingsStore
+    private let loginItem: LoginItemControlling
 
     public init(
-        permissionStore: PermissionStore = FixturePermissionStore(),
-        appSettingsStore: AppSettingsStore = FixtureAppSettingsStore()
+        appSettingsStore: AppSettingsStore = FixtureAppSettingsStore(),
+        dataDirectoryURL: URL? = nil,
+        loginItem: LoginItemControlling = SMAppServiceLoginItem()
     ) {
-        self.permissionStore = permissionStore
         self.appSettingsStore = appSettingsStore
-        libraryRoot = nil
-        automationState = .running
+        self.dataDirectoryURL = dataDirectoryURL
+        self.loginItem = loginItem
+        watchFoldersEnabled = true
         launchAtLoginEnabled = false
-        aiEnabled = false
-        aiProvider = .none
-        aiLocalOnlyModeEnabled = true
-        aiContentSharingEnabled = false
-        aiMetadataOnlyModeEnabled = true
-        aiAuditLoggingEnabled = true
         errorMessage = nil
         isLoading = false
-    }
-
-    public var permissionHealthSummary: String {
-        let records = [libraryRoot].compactMap { $0 }
-        guard !records.isEmpty else {
-            return "No library storage folder configured."
-        }
-
-        let unhealthy = records.filter { $0.state != .granted }
-        return unhealthy.isEmpty ? "All permissions healthy." : "\(unhealthy.count) permission issue(s)."
-    }
-
-    public var permissionHealthActionHint: String {
-        if libraryRoot == nil {
-            return "Use Library to choose storage; use Start to add remembered source folders."
-        }
-        if libraryRoot?.state != .granted {
-            return "Refresh storage permission here. Source permissions are managed from Start; missing files are recovered from Library."
-        }
-        return "Source permissions are managed from Start. Missing files are recovered from Library."
-    }
-
-    public var aiPrivacySummary: String {
-        if !aiEnabled {
-            return "AI is off. Tools remain available locally for future agent planning."
-        }
-        if aiLocalOnlyModeEnabled {
-            return "AI is local-only. Remote providers cannot receive file content."
-        }
-        if aiMetadataOnlyModeEnabled {
-            return "AI may use \(aiProvider.rawValue), but only metadata can leave the device."
-        }
-        return aiContentSharingEnabled
-            ? "AI may use \(aiProvider.rawValue) with explicit content sharing enabled."
-            : "AI provider access is enabled, but content sharing is off."
-    }
-
-    public var diagnosticsSummary: String {
-        "Activity contains the audit trail for capture, indexing, decisions, filesystem operations, and tool calls."
     }
 
     public func load() async {
         isLoading = true
         errorMessage = nil
-
         do {
-            libraryRoot = try await permissionStore.records(scope: .libraryRoot).first
-            applySettings(try await appSettingsStore.load())
+            let settings = try await appSettingsStore.load()
+            watchFoldersEnabled = settings.automationState == .running
         } catch {
-            libraryRoot = nil
             errorMessage = error.localizedDescription
         }
-
+        launchAtLoginEnabled = loginItem.isEnabled()
         isLoading = false
     }
 
-    public func setLibraryRoot(_ url: URL, state: PermissionState = .missing) async {
-        let record = PermissionRecord(scope: .libraryRoot, url: url, state: state)
-        await save(record)
-        libraryRoot = record
-    }
-
-    public func pauseAutomation() async {
-        await setAutomationState(.paused)
-    }
-
-    public func resumeAutomation() async {
-        await setAutomationState(.running)
-    }
-
-    public func setAutomationState(_ state: AutomationState) async {
-        automationState = state
+    public func setWatchFoldersEnabled(_ enabled: Bool) async {
+        errorMessage = nil
+        watchFoldersEnabled = enabled
         await saveCurrentSettings()
     }
 
     public func setLaunchAtLoginEnabled(_ enabled: Bool) async {
-        launchAtLoginEnabled = enabled
-        await saveCurrentSettings()
-    }
-
-    public func setAIEnabled(_ enabled: Bool) async {
-        aiEnabled = enabled
-        if !enabled {
-            aiProvider = .none
-            aiLocalOnlyModeEnabled = true
-            aiContentSharingEnabled = false
-            aiMetadataOnlyModeEnabled = true
-        }
-        await saveCurrentSettings()
-    }
-
-    public func setAIProvider(_ provider: AIProviderKind) async {
-        aiProvider = provider
-        aiEnabled = provider != .none
-        if provider == .none {
-            aiLocalOnlyModeEnabled = true
-            aiContentSharingEnabled = false
-            aiMetadataOnlyModeEnabled = true
-        }
-        await saveCurrentSettings()
-    }
-
-    public func setAILocalOnlyModeEnabled(_ enabled: Bool) async {
-        aiLocalOnlyModeEnabled = enabled
-        if enabled {
-            aiContentSharingEnabled = false
-            aiMetadataOnlyModeEnabled = true
-        }
-        await saveCurrentSettings()
-    }
-
-    public func setAIContentSharingEnabled(_ enabled: Bool) async {
-        aiContentSharingEnabled = enabled
-        if enabled {
-            aiLocalOnlyModeEnabled = false
-            aiMetadataOnlyModeEnabled = false
-        }
-        await saveCurrentSettings()
-    }
-
-    public func setAIMetadataOnlyModeEnabled(_ enabled: Bool) async {
-        aiMetadataOnlyModeEnabled = enabled
-        if enabled {
-            aiContentSharingEnabled = false
-        }
-        await saveCurrentSettings()
-    }
-
-    public func setAIAuditLoggingEnabled(_ enabled: Bool) async {
-        aiAuditLoggingEnabled = enabled
-        await saveCurrentSettings()
-    }
-
-    private func save(_ record: PermissionRecord) async {
         errorMessage = nil
         do {
-            try await permissionStore.save(record)
+            try loginItem.setEnabled(enabled)
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = "Couldn’t update launch at login: \(error.localizedDescription)"
         }
+        // Reflect the OS's actual state, not the requested one.
+        launchAtLoginEnabled = loginItem.isEnabled()
+        await saveCurrentSettings()
     }
 
-    private func applySettings(_ settings: AppSettings) {
-        automationState = settings.automationState
-        launchAtLoginEnabled = settings.launchAtLoginEnabled
-        aiEnabled = settings.aiEnabled
-        aiProvider = settings.aiProvider
-        aiLocalOnlyModeEnabled = settings.aiLocalOnlyModeEnabled
-        aiContentSharingEnabled = settings.aiContentSharingEnabled
-        aiMetadataOnlyModeEnabled = settings.aiMetadataOnlyModeEnabled
-        aiAuditLoggingEnabled = settings.aiAuditLoggingEnabled
-    }
-
+    /// Read-modify-write so settings this surface doesn't manage (e.g. the
+    /// not-yet-shipped AI configuration) are preserved untouched. Sets an error
+    /// only on failure — it never clears one a caller just set.
     private func saveCurrentSettings() async {
-        errorMessage = nil
         do {
-            try await appSettingsStore.save(
-                AppSettings(
-                    automationState: automationState,
-                    launchAtLoginEnabled: launchAtLoginEnabled,
-                    aiEnabled: aiEnabled,
-                    aiProvider: aiProvider,
-                    aiLocalOnlyModeEnabled: aiLocalOnlyModeEnabled,
-                    aiContentSharingEnabled: aiContentSharingEnabled,
-                    aiMetadataOnlyModeEnabled: aiMetadataOnlyModeEnabled,
-                    aiAuditLoggingEnabled: aiAuditLoggingEnabled
-                )
-            )
+            var settings = (try? await appSettingsStore.load()) ?? .defaults
+            settings.automationState = watchFoldersEnabled ? .running : .paused
+            settings.launchAtLoginEnabled = launchAtLoginEnabled
+            try await appSettingsStore.save(settings)
         } catch {
             errorMessage = error.localizedDescription
         }
-    }
-}
-
-public actor FixturePermissionStore: PermissionStore {
-    private var records: [PermissionRecord]
-
-    public init(records: [PermissionRecord] = []) {
-        self.records = records
-    }
-
-    public func save(_ record: PermissionRecord) async throws {
-        records.removeAll { $0.id == record.id || $0.scope == .libraryRoot && record.scope == .libraryRoot }
-        records.append(record)
-    }
-
-    public func remove(id: UUID) async throws {
-        records.removeAll { $0.id == id }
-    }
-
-    public func records(scope: PermissionScope?) async throws -> [PermissionRecord] {
-        guard let scope else {
-            return records
-        }
-        return records.filter { $0.scope == scope }
     }
 }
 
