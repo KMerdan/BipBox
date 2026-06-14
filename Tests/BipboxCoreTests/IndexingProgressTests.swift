@@ -36,9 +36,9 @@ final class IndexingProgressTests: XCTestCase {
         let scan = IndexingActivity(kind: .scanning(sourceName: "Downloads"),
                                     completed: 100, total: 700, startedAt: start)
         XCTAssertEqual(scan.statusLine(now: start.addingTimeInterval(60)),
-                       "Indexing Downloads · 100 of 700 · ~6 min left")
+                       "Indexing files in Downloads · 100 of 700 · ~6 min left")
         let embed = IndexingActivity(kind: .embedding, completed: 1, total: 9, startedAt: start)
-        XCTAssertEqual(embed.statusLine(now: start), "Embedding for semantic search · 1 of 9")
+        XCTAssertEqual(embed.statusLine(now: start), "Preparing semantic search · 1 of 9")
     }
 
     // MARK: - backfill reports (processed, total)

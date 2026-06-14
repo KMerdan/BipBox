@@ -215,7 +215,10 @@ struct OverviewGraph: View {
             ZStack {
                 clusterEdges(layout, links)
                 ForEach(Array(cl.enumerated()), id: \.offset) { i, c in
-                    clusterNode(c, index: i, at: layout.pts[i], links: links)
+                    // A lone cluster sits dead-center instead of being flung to the
+                    // ring's top by the radial layout.
+                    let at = cl.count == 1 ? CGPoint(x: layout.cx, y: layout.cy) : layout.pts[i]
+                    clusterNode(c, index: i, at: at, links: links)
                 }
                 if cl.isEmpty {
                     VStack(spacing: 8) {
@@ -240,7 +243,10 @@ struct OverviewGraph: View {
     }
 
     private func clusterNode(_ c: LibraryCluster, index i: Int, at p: CGPoint, links: [(Int, Int, Int)]) -> some View {
-        let size = 50 + CGFloat(c.itemIDs.count) * 8
+        // Sub-linear, capped: orbs stay readable (≈54–118pt) whether a cluster
+        // holds 1 file or 5,000 — was `50 + count*8`, which ballooned a 50-file
+        // group to a 450pt blob that filled the canvas.
+        let size = min(54 + CGFloat(c.itemIDs.count).squareRoot() * 10, 118)
         let dimmed = hov != nil && hov != i && !links.contains { ($0.0 == hov && $0.1 == i) || ($0.1 == hov && $0.0 == i) }
         return Button { model.select(.cluster(c.id)) } label: {
             VStack(spacing: 9) {

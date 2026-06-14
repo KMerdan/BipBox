@@ -26,8 +26,10 @@ public struct IndexingActivity: Equatable, Sendable {
     public func statusLine(now: Date = Date()) -> String {
         let verb: String
         switch kind {
-        case .scanning(let sourceName): verb = "Indexing \(sourceName)"
-        case .embedding: verb = "Embedding for semantic search"
+        // "Indexing files in <name>" — avoids reading as "downloading" when the
+        // watched folder is literally named "Downloads".
+        case .scanning(let sourceName): verb = "Indexing files in \(sourceName)"
+        case .embedding: verb = "Preparing semantic search"
         }
         var parts = [verb, "\(completed.formatted()) of \(total.formatted())"]
         if let eta = etaDescription(now: now) {
