@@ -285,7 +285,10 @@ private final class BipboxApplicationModel: ObservableObject {
                     relatednessService: services.relatednessService,
                     relatedContextService: services.relatedContextService,
                     actionHandler: searchResultActions,
-                    statusFilter: .all
+                    statusFilter: .all,
+                    // Load the whole library, not a 50-row sample — otherwise the
+                    // gallery, source views, and clustering only ever see 50 items.
+                    limit: 50_000
                 ),
                 rules: RulesWorkspaceViewModel(
                     workflow: services.workflowConfiguration.workflow,

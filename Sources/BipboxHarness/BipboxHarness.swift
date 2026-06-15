@@ -161,7 +161,8 @@ public final class BipboxHarness {
                 relatednessService: services.relatednessService,
                 relatedContextService: services.relatedContextService,
                 actionHandler: HarnessSearchActions(),
-                statusFilter: .all
+                statusFilter: .all,
+                limit: 50_000
             ),
             rules: RulesWorkspaceViewModel(
                 workflow: services.workflowConfiguration.workflow,
