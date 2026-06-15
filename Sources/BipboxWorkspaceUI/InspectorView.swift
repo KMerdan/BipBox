@@ -69,24 +69,61 @@ struct ItemInspector: View {
                         }
                     }
 
-                    if isSelected, let overview = model.selectedOverview, !overview.contexts.isEmpty {
-                        InspSection(title: "In context") {
-                            FlowChips(overview.contexts.map {
-                                ChipData(id: $0.context.id.uuidString, text: $0.context.name, color: BB.grape)
-                            })
-                            .accessibilityIdentifier("item.contexts")
+                    if isSelected, !model.inspectorSimilar.isEmpty {
+                        InspSection(title: "Most similar") {
+                            VStack(spacing: 4) {
+                                ForEach(model.inspectorSimilar.map(\.item)) { rel in
+                                    let score = model.inspectorSimilar.first { $0.item.id == rel.id }?.score ?? 0
+                                    SimilarityRow(symbol: model.symbol(for: rel), title: rel.displayName, score: score) {
+                                        model.select(.item(rel.id))
+                                    }
+                                    .accessibilityIdentifier("similar.\(rel.id.uuidString)")
+                                }
+                            }
                         }
                     }
 
-                    if isSelected, !model.selectedRelated.isEmpty {
-                        InspSection(title: "Related") {
+                    if isSelected, !model.inspectorTopics.isEmpty {
+                        InspSection(title: "Topics") {
                             VStack(spacing: 4) {
-                                ForEach(model.selectedRelated.prefix(6).map(\.item)) { rel in
-                                    RelatedRow(symbol: model.symbol(for: rel), title: rel.displayName,
-                                               sub: "related content · \(model.sourceName(for: rel))") {
-                                        model.select(.item(rel.id))
+                                ForEach(model.inspectorTopics.map(\.cluster)) { cl in
+                                    RelatedRow(symbol: "square.stack.3d.up", title: cl.name,
+                                               sub: "\(cl.itemIDs.count) files") {
+                                        model.select(.cluster(cl.id))
                                     }
-                                    .accessibilityIdentifier("related.\(rel.id.uuidString)")
+                                }
+                            }
+                        }
+                    }
+
+                    if isSelected, let container = model.inspectorContainer {
+                        InspSection(title: container.tags.contains("unit:project") ? "In project" : "In collection") {
+                            RelatedRow(symbol: "folder.fill", title: container.displayName,
+                                       sub: "\(model.containedItems(of: container.id).count) files") {
+                                model.select(.item(container.id))
+                            }
+                        }
+                    }
+
+                    if isSelected, !model.inspectorContents.isEmpty {
+                        InspSection(title: "Contents") {
+                            VStack(spacing: 4) {
+                                ForEach(model.inspectorContents.prefix(12)) { member in
+                                    RelatedRow(symbol: model.symbol(for: member), title: member.displayName, sub: "member") {
+                                        model.select(.item(member.id))
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if isSelected, !model.inspectorDuplicates.isEmpty {
+                        InspSection(title: "Duplicates") {
+                            VStack(spacing: 4) {
+                                ForEach(model.inspectorDuplicates) { dup in
+                                    RelatedRow(symbol: "doc.on.doc", title: dup.displayName, sub: "identical copy") {
+                                        model.select(.item(dup.id))
+                                    }
                                 }
                             }
                         }
@@ -94,7 +131,7 @@ struct ItemInspector: View {
                 }.padding(20)
             }.scrollIndicators(.hidden)
         }
-        .task(id: item.id) { await model.loadInspectorData() }
+        .task(id: item.id) { await model.prepareInspector(for: item.id) }
     }
 
     private var isSelected: Bool {

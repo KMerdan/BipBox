@@ -57,6 +57,15 @@ public final class WorkspaceModel: ObservableObject {
     /// the sidebar status line with "n of m" + ETA. Nil when idle.
     @Published public private(set) var indexingActivity: IndexingActivity?
 
+    /// The selected item's relations (the 4 clean edges), resolved once per
+    /// selection and published so the inspector reads them without recomputing
+    /// cosine on every redraw.
+    @Published public private(set) var inspectorSimilar: [(item: IndexedItem, score: Double)] = []
+    @Published public private(set) var inspectorTopics: [(cluster: LibraryCluster, weight: Double)] = []
+    @Published public private(set) var inspectorContainer: IndexedItem?
+    @Published public private(set) var inspectorContents: [IndexedItem] = []
+    @Published public private(set) var inspectorDuplicates: [IndexedItem] = []
+
     /// Report (or clear) indexing progress. Throttled by callers; preserves the
     /// original start time while the same kind of work continues so the ETA is
     /// computed over the whole run, not the latest slice.
@@ -438,16 +447,25 @@ extension WorkspaceModel {
         return f
     }()
 
-    // MARK: inspector data (contexts / related for the selected item)
+    // MARK: inspector data — the 4 clean relations for the selected item
 
     var selectedOverview: RelatedContextOverview? { library.relatedContextOverview }
     var selectedRelated: [RelatedItem] { library.relatedItems }
 
-    /// Load the context/related graph for whatever item is currently selected.
-    func loadInspectorData() async {
-        guard case .item(let id) = selection, let it = item(id) else { return }
-        library.select(it)
-        await library.loadContextForSelected()
+    /// Resolve the inspector relations for the selected item (semantic index +
+    /// the four resolvers). Called from the inspector's `.task(id:)`.
+    public func prepareInspector(for id: UUID) async {
+        await ensureSemanticIndex()
+        guard case .item(id) = selection else { return }   // selection moved on
+        inspectorSimilar = similarItems(to: id, limit: 6).compactMap { s in
+            item(s.id).map { (item: $0, score: s.score) }
+        }
+        inspectorTopics = topicMemberships(for: id)
+        inspectorContainer = containingUnit(of: id)
+        let it = item(id)
+        inspectorContents = (it?.tags.contains("unit:collection") == true || it?.tags.contains("unit:project") == true)
+            ? containedItems(of: id) : []
+        inspectorDuplicates = duplicates(of: id)
     }
 
     // MARK: Tier-0 clusters

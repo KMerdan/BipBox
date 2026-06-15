@@ -232,6 +232,38 @@ struct WhyBox: View {
     }
 }
 
+/// A related-file row with a similarity strength bar (0…1) — the inspector twin
+/// of the graph's distance/thickness weighting.
+struct SimilarityRow: View {
+    let symbol: String
+    let title: String
+    let score: Double          // 0…1 cosine
+    let action: () -> Void
+    @State private var hover = false
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: symbol).font(.system(size: 13)).foregroundStyle(BB.ink3)
+                    .frame(width: 26, height: 26).background(BB.chipBg, in: RoundedRectangle(cornerRadius: 6))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title).font(.system(size: 13, weight: .medium)).foregroundStyle(BB.ink).lineLimit(1)
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(BB.hair).frame(height: 3)
+                            Capsule().fill(BB.accent.opacity(0.85))
+                                .frame(width: max(3, geo.size.width * CGFloat(min(1, max(0, score)))), height: 3)
+                        }
+                    }.frame(height: 3)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8).padding(.vertical, 7)
+            .background(hover ? BB.rowHover : .clear, in: RoundedRectangle(cornerRadius: 8))
+            .contentShape(Rectangle())
+        }.buttonStyle(.plain).onHover { hover = $0 }
+    }
+}
+
 struct RelatedRow: View {
     let symbol: String
     let title: String
