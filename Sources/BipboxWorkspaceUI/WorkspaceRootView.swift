@@ -158,7 +158,8 @@ private struct WorkspaceToolbar: View {
                 .accessibilityIdentifier("toolbar.forward")
             searchField
             Spacer(minLength: 8)
-            if model.presentation == .connections && !model.isSearching && model.section.isLibraryLike { groupByMenu }
+            // Group-by drives clustering in Connections AND sectioning in Gallery.
+            if model.section.isLibraryLike && !model.isSearching { groupByMenu }
             if model.section.isLibraryLike || model.isSearching { viewToggle }
             let effectiveDark = (AppAppearance(rawValue: appearanceRaw)?.colorScheme ?? scheme) == .dark
             ToolbarButton(symbol: effectiveDark ? "sun.max" : "moon") {

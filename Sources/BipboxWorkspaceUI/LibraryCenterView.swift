@@ -86,19 +86,58 @@ struct LibraryCenterView: View {
         }
     }
 
-    // MARK: gallery
+    // MARK: gallery — the complete browse surface, sectioned by the active lens
     private func gallery(_ items: [IndexedItem]) -> some View {
-        Group {
+        let sections = gallerySections(items)
+        let columns = [GridItem(.adaptive(minimum: 180), spacing: 16)]
+        return Group {
             if items.isEmpty {
                 emptyState
+            } else if sections.count <= 1 {
+                // No grouping available (e.g. embeddings not ready): flat grid.
+                ScrollView {
+                    LazyVGrid(columns: columns, spacing: 16) {
+                        ForEach(items) { GalleryCard(item: $0) }
+                    }.padding(20)
+                }.scrollIndicators(.hidden)
             } else {
                 ScrollView {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 16)], spacing: 16) {
-                        ForEach(items) { GalleryCard(item: $0) }
+                    LazyVStack(alignment: .leading, spacing: 22) {
+                        ForEach(sections, id: \.name) { section in
+                            VStack(alignment: .leading, spacing: 10) {
+                                HStack(spacing: 6) {
+                                    Text(section.name.uppercased()).font(BB.groupHead).tracking(0.4)
+                                        .foregroundStyle(BB.ink3).lineLimit(1)
+                                    Text("\(section.items.count)").font(.system(size: 11, weight: .medium))
+                                        .foregroundStyle(BB.ink3)
+                                    Spacer()
+                                }
+                                LazyVGrid(columns: columns, spacing: 16) {
+                                    ForEach(section.items) { GalleryCard(item: $0) }
+                                }
+                            }
+                        }
                     }.padding(20)
                 }.scrollIndicators(.hidden)
             }
         }
+    }
+
+    /// Group the visible items by the active lens's clusters, with everything not
+    /// in a cluster collected into a trailing "Other" section (so the gallery is
+    /// always complete — every file appears exactly once).
+    private func gallerySections(_ items: [IndexedItem]) -> [(name: String, items: [IndexedItem])] {
+        guard !model.clusters.isEmpty else { return [(name: "All", items: items)] }
+        let byID = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        var used = Set<UUID>()
+        var sections: [(name: String, items: [IndexedItem])] = []
+        for cl in model.clusters {
+            let members = cl.itemIDs.compactMap { byID[$0] }.filter { used.insert($0.id).inserted }
+            if !members.isEmpty { sections.append((name: cl.name, items: members)) }
+        }
+        let leftover = items.filter { !used.contains($0.id) }
+        if !leftover.isEmpty { sections.append((name: "Other", items: leftover)) }
+        return sections
     }
 
     @ViewBuilder
