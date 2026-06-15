@@ -45,6 +45,14 @@ public final class WorkspaceModel: ObservableObject {
     @Published public private(set) var clusters: [LibraryCluster] = []
     /// Topic<->topic edges (semantic centroid similarity) backing the current `clusters`.
     private var topicEdges: [(a: Int, b: Int, weight: Double)] = []
+
+    // MARK: semantic index (the one source of truth for the 4 clean relations)
+    // Built once from the embeddings, reused for topic discovery AND item-level
+    // cosine neighbors so weights are consistent across the graph and inspector.
+    private var semVectors: [UUID: [Float]] = [:]        // mean-centered + unit-normalized
+    private var semGraph: TopicGraph = .empty            // topics + soft membership + edges
+    private var semCentroids: [Int: [Float]] = [:]       // topic centroids in semVectors space
+    private var semLoaded = false
     /// Long-running indexing work (first scan / embedding backfill) rendered as
     /// the sidebar status line with "n of m" + ETA. Nil when idle.
     @Published public private(set) var indexingActivity: IndexingActivity?
@@ -345,6 +353,7 @@ public final class WorkspaceModel: ObservableObject {
     /// Re-pull library + sources + queue (after a capture/scan).
     public func refresh() async {
         await library.search()
+        invalidateSemanticIndex()   // library/embeddings may have changed
         await recomputeClusters()
         await onboarding.load()
         await reviewQueue.load()
@@ -592,45 +601,109 @@ extension WorkspaceModel {
         }
     }
 
+    /// The clean item neighborhood: only the four meaningful relations —
+    /// `similar` (cosine), `hasTopic`, `contains` (parent project/collection),
+    /// `duplicate`. Provenance (source/folder/path) is NOT here; it lives in the
+    /// inspector's Details.
     private func itemNeighbors(_ id: UUID) -> [GraphNeighbor] {
-        guard let it = item(id) else { return [] }
+        guard item(id) != nil else { return [] }
         var out: [GraphNeighbor] = []
 
-        // Source it came from.
-        if let sid = sourceID(of: it), let src = sources.first(where: { $0.id == sid }) {
-            out.append(GraphNeighbor(id: "src:\(sid)", selection: .source(sid), name: src.displayName,
-                                     kind: "watched folder", color: BBPalette.color(for: sid),
-                                     symbol: "folder.fill", pred: "came from", strength: 0.55,
-                                     category: "Sources", hubCount: nodeMembers(.source(sid)).count))
+        // Topic(s) it belongs to — the anchor(s), weighted by closeness to centroid.
+        for (cl, weight) in topicMemberships(for: id) {
+            out.append(GraphNeighbor(id: "cluster:\(cl.id)", selection: .cluster(cl.id), name: cl.name,
+                                     kind: "topic", color: cl.color, symbol: "square.stack.3d.up",
+                                     pred: "topic", strength: weight, category: "Topics",
+                                     hubCount: cl.itemIDs.count))
         }
 
-        // Contexts (only when the loaded overview is for this item).
-        if let overview = selectedOverview, overview.itemID == id {
-            for rel in overview.contexts {
-                let c = rel.context
-                out.append(GraphNeighbor(id: "ctx:\(c.id)", selection: .context(c.id), name: c.name,
-                                         kind: c.kind.rawValue, color: BB.grape, symbol: contextSymbol(c.kind),
-                                         pred: contextPredicate(c.kind), strength: 0.9,
-                                         category: contextCategory(c.kind), hubCount: 0))
+        // Most similar files (vector cosine), distance/thickness = strength.
+        for sim in similarItems(to: id, limit: 8) {
+            guard let other = item(sim.id) else { continue }
+            out.append(GraphNeighbor(id: "item:\(sim.id)", selection: .item(sim.id),
+                                     name: other.displayName, kind: "file",
+                                     color: clusterOf(sim.id)?.color ?? BB.ink2,
+                                     symbol: symbol(for: other), pred: "similar",
+                                     strength: sim.score, category: "Similar", hubCount: 0))
+        }
+
+        // Containing project / collection (structural drill-up).
+        if let unit = containingUnit(of: id) {
+            out.append(GraphNeighbor(id: "item:\(unit.id)", selection: .item(unit.id), name: unit.displayName,
+                                     kind: unit.tags.contains("unit:project") ? "project" : "collection",
+                                     color: BB.grape, symbol: "folder.fill", pred: "in", strength: 0.85,
+                                     category: "Container", hubCount: 0))
+        }
+
+        // If THIS item is itself a project/collection, list its members (drill-down).
+        if let it = item(id), it.tags.contains("unit:collection") || it.tags.contains("unit:project") {
+            for member in containedItems(of: id).prefix(12) {
+                out.append(GraphNeighbor(id: "item:\(member.id)", selection: .item(member.id),
+                                         name: member.displayName, kind: "file",
+                                         color: clusterOf(member.id)?.color ?? BB.ink2,
+                                         symbol: symbol(for: member), pred: "contains", strength: 0.6,
+                                         category: "Contents", hubCount: 0))
             }
         }
 
-        // Similar / related files.
-        for rel in selectedRelated.prefix(5) where rel.item.id != id {
-            out.append(GraphNeighbor(id: "item:\(rel.item.id)", selection: .item(rel.item.id),
-                                     name: rel.item.displayName, kind: "file",
-                                     color: clusterOf(rel.item.id)?.color ?? BB.ink2,
-                                     symbol: symbol(for: rel.item), pred: "related",
-                                     strength: min(1, max(0.3, rel.score)), category: "Files", hubCount: 0))
-        }
-
-        // Cluster it belongs to.
-        if let cl = clusterOf(id) {
-            out.append(GraphNeighbor(id: "cluster:\(cl.id)", selection: .cluster(cl.id), name: cl.name,
-                                     kind: "similarity group", color: cl.color, symbol: "square.stack.3d.up",
-                                     pred: "in group", strength: 0.7, category: "Groups", hubCount: cl.itemIDs.count))
+        // Exact duplicates (same byte fingerprint).
+        for dup in duplicates(of: id) {
+            out.append(GraphNeighbor(id: "item:\(dup.id)", selection: .item(dup.id), name: dup.displayName,
+                                     kind: "file", color: BB.ink2, symbol: "doc.on.doc",
+                                     pred: "duplicate", strength: 1.0, category: "Duplicates", hubCount: 0))
         }
         return out
+    }
+
+    // MARK: - the four clean relations (resolved from the semantic index)
+
+    /// Top-`limit` files by cosine over the mean-centered embeddings.
+    public func similarItems(to id: UUID, limit: Int) -> [(id: UUID, score: Double)] {
+        guard let v = semVectors[id], !v.isEmpty else { return [] }
+        var scored: [(UUID, Double)] = []
+        scored.reserveCapacity(semVectors.count)
+        for (oid, ov) in semVectors where oid != id && ov.count == v.count {
+            var s: Float = 0
+            for d in 0..<v.count { s += v[d] * ov[d] }
+            if s > 0 { scored.append((oid, Double(s))) }
+        }
+        return scored.sorted { $0.1 > $1.1 }.prefix(limit).map { (id: $0.0, score: $0.1) }
+    }
+
+    /// Topics the item belongs to (soft membership), weighted by cosine-to-centroid.
+    public func topicMemberships(for id: UUID) -> [(cluster: LibraryCluster, weight: Double)] {
+        guard let topicIdxs = semGraph.membership[id], let v = semVectors[id] else { return [] }
+        var out: [(LibraryCluster, Double)] = []
+        for ti in topicIdxs {
+            guard let cl = clusters.first(where: { $0.id == "topic:\(ti)" }) else { continue }
+            var w = 0.7
+            if let c = semCentroids[ti], c.count == v.count {
+                var s: Float = 0; for d in 0..<v.count { s += v[d] * c[d] }; w = Double(max(0, s))
+            }
+            out.append((cl, w))
+        }
+        return out.sorted { $0.1 > $1.1 }
+    }
+
+    /// The project/collection that contains this file (via its `collection:<id>` tag).
+    public func containingUnit(of id: UUID) -> IndexedItem? {
+        guard let it = item(id),
+              let tag = it.tags.first(where: { $0.hasPrefix("collection:") }),
+              let uid = UUID(uuidString: String(tag.dropFirst("collection:".count)))
+        else { return nil }
+        return item(uid)
+    }
+
+    /// Exact-duplicate files (same content fingerprint), excluding self.
+    public func duplicates(of id: UUID) -> [IndexedItem] {
+        guard let it = item(id), let fp = it.contentFingerprint else { return [] }
+        return library.results.filter { $0.id != id && $0.contentFingerprint == fp }
+    }
+
+    /// Files that belong to this project/collection (tagged `collection:<id>`).
+    public func containedItems(of id: UUID) -> [IndexedItem] {
+        let tag = "collection:\(id.uuidString)"
+        return library.results.filter { $0.tags.contains(tag) }
     }
 
     private func memberNeighbor(_ it: IndexedItem) -> GraphNeighbor {
@@ -711,34 +784,47 @@ extension WorkspaceModel {
             topicEdges = []
             clusters = timeClusters()
         case .smart:
-            let graph = await discoverTopics()
-            topicEdges = graph.edges
-            clusters = graph.topics.enumerated().map { idx, topic in
+            await ensureSemanticIndex()
+            topicEdges = semGraph.edges
+            clusters = semGraph.topics.enumerated().map { idx, topic in
                 LibraryCluster(id: "topic:\(topic.id)", name: topic.label,
                                color: BBPalette.color(for: idx), itemIDs: topic.memberIDs)
             }
         }
     }
 
-    /// Discover topics from the stored embeddings of the current library using the
-    /// validated recipe. Empty when there are no embeddings yet — no fallback.
+    /// Invalidate the semantic index after the library or embeddings change
+    /// (rescan, backfill, capture) so the next access rebuilds it.
+    public func invalidateSemanticIndex() { semLoaded = false }
+
+    /// Build the semantic index from stored embeddings: mean-center + normalize
+    /// every item vector (consistent space for both topic discovery and item
+    /// cosine neighbors), run topic discovery, and recompute topic centroids in
+    /// that same space so membership weights are comparable. Empty when there are
+    /// no embeddings yet — no fallback. Cached until `invalidateSemanticIndex()`.
     ///
     /// Discovery SEEDS are aggregate units (projects/collections), content-bearing
-    /// loose items, and a capped sample of each collection's members. Everything
-    /// else (the bulk of a 7k-file dump, media, bundles) is soft-ASSIGNED to the
-    /// discovered topics but never drives them — the experiment's anti-flooding
-    /// rule that turns hundreds of micro-topics back into ~dozens of real ones.
-    private func discoverTopics() async -> TopicGraph {
+    /// loose items, and a capped sample of each collection's members; everything
+    /// else is soft-ASSIGNED — the anti-flooding rule that keeps big dumps from
+    /// shattering the topic structure.
+    private func ensureSemanticIndex() async {
+        guard !semLoaded else { return }
         guard let services = graphServices,
               let vectorIndex = services.vectorIndex,
               let embedder = services.embedder,
               let records = try? await vectorIndex.vectors(modelID: embedder.modelID),
               !records.isEmpty
-        else { return .empty }
+        else { semVectors = [:]; semGraph = .empty; semCentroids = [:]; semLoaded = true; return }
 
+        let ids = Set(library.results.map(\.id))
+        let recs = records.filter { ids.contains($0.itemID) }
+        guard let dim = recs.first?.vector.count, dim > 0, recs.count >= 3 else {
+            semVectors = [:]; semGraph = .empty; semCentroids = [:]; semLoaded = true; return
+        }
+
+        // Seeds vs assign split (drives discovery without flooding).
         let samplePerCollection = 15
         var seedIDs: Set<UUID> = []
-        var assignIDs: Set<UUID> = []
         var membersByCollection: [String: [IndexedItem]] = [:]
         for item in library.results {
             if item.tags.contains("unit:member"),
@@ -747,39 +833,81 @@ extension WorkspaceModel {
             } else if item.tags.contains("unit:project") || item.tags.contains("unit:collection") {
                 seedIDs.insert(item.id)
             } else if item.tags.contains("unit:bundle") {
-                assignIDs.insert(item.id)
+                continue
             } else {
-                // Loose files and legacy/drag-drop items: content-bearing kinds
-                // seed discovery, metadata-only kinds (media/archives) are
-                // assign-only so they never pollute the topic structure.
                 switch typeCategory(for: item) {
                 case "Documents", "Spreadsheets", "Presentations", "Code", "Folders":
                     seedIDs.insert(item.id)
-                default:
-                    assignIDs.insert(item.id)
+                default: break
                 }
             }
         }
         for members in membersByCollection.values {
-            let sorted = members.sorted { $0.displayName < $1.displayName }
-            for (index, member) in sorted.enumerated() {
-                if index < samplePerCollection { seedIDs.insert(member.id) }
-                else { assignIDs.insert(member.id) }
-            }
+            for (index, member) in members.sorted(by: { $0.displayName < $1.displayName }).enumerated()
+            where index < samplePerCollection { seedIDs.insert(member.id) }
         }
-
-        let seeds = records.filter { seedIDs.contains($0.itemID) }
-            .map { (id: $0.itemID, vector: $0.vector) }
-        let assign = records.filter { assignIDs.contains($0.itemID) }
-            .map { (id: $0.itemID, vector: $0.vector) }
-        guard seeds.count >= 3 else { return .empty }
         var names: [UUID: String] = [:]
         for it in library.results { names[it.id] = it.displayName }
-        // O(n^2) kNN over the seeds — must run off the main actor or the UI
-        // freezes for the whole recompute.
-        return await Task.detached(priority: .userInitiated) {
-            TopicDiscovery.discover(vectors: seeds, assign: assign, names: names)
+
+        // Heavy work (centering + O(n^2) kNN) off the main actor.
+        let result = await Task.detached(priority: .userInitiated) {
+            Self.buildSemanticIndex(records: recs, dim: dim, seedIDs: seedIDs, names: names)
         }.value
+        semVectors = result.vectors
+        semGraph = result.graph
+        semCentroids = result.centroids
+        semLoaded = true
+    }
+
+    private struct SemanticIndex: Sendable {
+        let vectors: [UUID: [Float]]
+        let graph: TopicGraph
+        let centroids: [Int: [Float]]
+    }
+
+    private nonisolated static func buildSemanticIndex(
+        records: [VectorRecord], dim: Int, seedIDs: Set<UUID>, names: [UUID: String]
+    ) -> SemanticIndex {
+        // 1. Mean-center + unit-normalize (anisotropy fix; gives cosines real spread).
+        var mu = [Float](repeating: 0, count: dim)
+        for r in records where r.vector.count == dim { for d in 0..<dim { mu[d] += r.vector[d] } }
+        for d in 0..<dim { mu[d] /= Float(records.count) }
+        var centered: [UUID: [Float]] = [:]
+        centered.reserveCapacity(records.count)
+        for r in records where r.vector.count == dim {
+            var v = r.vector
+            for d in 0..<dim { v[d] -= mu[d] }
+            var norm: Float = 0; for x in v { norm += x * x }; norm = norm.squareRoot()
+            if norm > 0 { for d in 0..<dim { v[d] /= norm } }
+            centered[r.itemID] = v
+        }
+
+        // 2. Topic discovery over the centered space (pre-centered → skip its own).
+        let seeds = records.filter { seedIDs.contains($0.itemID) }.compactMap { r in
+            centered[r.itemID].map { (id: r.itemID, vector: $0) }
+        }
+        let assign = records.filter { !seedIDs.contains($0.itemID) }.compactMap { r in
+            centered[r.itemID].map { (id: r.itemID, vector: $0) }
+        }
+        guard seeds.count >= 3 else {
+            return SemanticIndex(vectors: centered, graph: .empty, centroids: [:])
+        }
+        let graph = TopicDiscovery.discover(
+            vectors: seeds, assign: assign, names: names, preCentered: true)
+
+        // 3. Topic centroids in the SAME centered space (so item↔topic weights are
+        //    comparable to item↔item cosines).
+        var centroids: [Int: [Float]] = [:]
+        for topic in graph.topics {
+            var c = [Float](repeating: 0, count: dim)
+            var n = 0
+            for mid in topic.memberIDs { if let v = centered[mid] { for d in 0..<dim { c[d] += v[d] }; n += 1 } }
+            guard n > 0 else { continue }
+            var norm: Float = 0; for x in c { norm += x * x }; norm = norm.squareRoot()
+            if norm > 0 { for d in 0..<dim { c[d] /= norm } }
+            centroids[topic.id] = c
+        }
+        return SemanticIndex(vectors: centered, graph: graph, centroids: centroids)
     }
 
     private func sourceClusters() -> [LibraryCluster] {
@@ -863,25 +991,6 @@ extension WorkspaceModel {
         }
     }
 
-    /// Nearest items by embedding cosine (the item's own stored vector → nearest),
-    /// as graph neighbors. Empty when embeddings/vectors are unavailable.
-    private func semanticNeighbors(of id: UUID, services: WorkspaceGraphServices, limit: Int) async -> [GraphNeighbor] {
-        guard let vectorIndex = services.vectorIndex, let embedder = services.embedder else { return [] }
-        guard let records = try? await vectorIndex.vectors(modelID: embedder.modelID),
-              let selfVector = records.first(where: { $0.itemID == id })?.vector else { return [] }
-        let query = VectorSearchQuery(modelID: embedder.modelID, vector: selfVector, limit: limit + 1)
-        guard let matches = try? await vectorIndex.nearest(to: query) else { return [] }
-        var out: [GraphNeighbor] = []
-        for match in matches where match.itemID != id {
-            guard let it = item(match.itemID) else { continue }
-            out.append(GraphNeighbor(id: "item:\(it.id)", selection: .item(it.id), name: it.displayName,
-                                     kind: "file", color: clusterOf(it.id)?.color ?? BB.ink2,
-                                     symbol: symbol(for: it), pred: "similar",
-                                     strength: min(1, max(0.3, match.score)), category: "Files", hubCount: 0))
-            if out.count >= limit { break }
-        }
-        return out
-    }
 
     private func loadItemGraph(_ id: UUID) async -> LoadedGraph {
         // Center from the library item, else the knowledge store.
@@ -889,56 +998,11 @@ extension WorkspaceModel {
         if center == nil, let ki = try? await graphServices?.store.knowledgeItem(id: id) {
             center = GraphCenter(name: ki.displayName, symbol: ki.kind.symbolName, color: BB.accent, kind: ki.kind.rawValue, isItem: true)
         }
-        guard let services = graphServices else {
-            // Fixture/test fallback: synchronous, library-only neighbors.
-            return LoadedGraph(center: center, neighbors: graphNeighbors(for: .item(id)))
-        }
-
-        var neighbors: [GraphNeighbor] = []
-
-        // Source it came from.
-        if let ki = try? await services.store.knowledgeItem(id: id), let sid = ki.sourceID,
-           let src = sources.first(where: { $0.id == sid }) {
-            neighbors.append(GraphNeighbor(id: "src:\(sid)", selection: .source(sid), name: src.displayName,
-                                           kind: "watched folder", color: BBPalette.color(for: sid),
-                                           symbol: "folder.fill", pred: "came from", strength: 0.55,
-                                           category: "Sources", hubCount: nodeMembers(.source(sid)).count))
-        }
-
-        // Contexts (folder / topic / person / project) from the live graph.
-        if let contexts = try? await services.graph.contexts(relatedTo: id) {
-            for rel in contexts {
-                let c = rel.context
-                neighbors.append(GraphNeighbor(id: "ctx:\(c.id)", selection: .context(c.id), name: c.name,
-                                               kind: c.kind.rawValue, color: BB.grape, symbol: contextSymbol(c.kind),
-                                               pred: contextPredicate(c.kind), strength: 0.9,
-                                               category: contextCategory(c.kind), hubCount: 0))
-            }
-        }
-
-        // Related files: prefer semantic neighbors (vector cosine); fall back to
-        // the lexical/temporal relatedness service when embeddings are absent.
-        let semantic = await semanticNeighbors(of: id, services: services, limit: 6)
-        if !semantic.isEmpty {
-            neighbors.append(contentsOf: semantic)
-        } else if let related = try? await services.relatedness.relatedItems(to: id, limit: 6) {
-            for r in related where r.item.id != id {
-                neighbors.append(GraphNeighbor(id: "item:\(r.item.id)", selection: .item(r.item.id),
-                                               name: r.item.displayName, kind: "file",
-                                               color: clusterOf(r.item.id)?.color ?? BB.ink2,
-                                               symbol: symbol(for: r.item), pred: "related",
-                                               strength: min(1, max(0.3, r.score)), category: "Files", hubCount: 0))
-            }
-        }
-
-        // Tier-0 type cluster it belongs to.
-        if let cl = clusterOf(id) {
-            neighbors.append(GraphNeighbor(id: "cluster:\(cl.id)", selection: .cluster(cl.id), name: cl.name,
-                                           kind: "type group", color: cl.color, symbol: "square.stack.3d.up",
-                                           pred: "in group", strength: 0.7, category: "Groups", hubCount: cl.itemIDs.count))
-        }
-
-        return LoadedGraph(center: center, neighbors: neighbors)
+        // The clean 4-edge neighborhood (similar / topic / contains / duplicate),
+        // resolved from the shared semantic index. Provenance stays in the
+        // inspector, not the graph.
+        await ensureSemanticIndex()
+        return LoadedGraph(center: center, neighbors: itemNeighbors(id))
     }
 
     private func loadContextGraph(_ id: UUID) async -> LoadedGraph {

@@ -421,6 +421,7 @@ private final class BipboxApplicationModel: ObservableObject {
             }
         }
         workspaceModel.reportIndexing(kind: nil)
+        workspaceModel.invalidateSemanticIndex()   // embeddings changed
         await workspaceModel.recomputeClusters()
     }
 

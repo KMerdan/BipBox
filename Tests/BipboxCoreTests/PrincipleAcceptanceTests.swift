@@ -95,15 +95,18 @@ final class PrincipleAcceptanceTests: XCTestCase {
 
     func test_P4_itemConnectsToContextAndContextListsMembers() async throws {
         var snap = await harness.addFolder(project, depth: .always)
-        let report = try XCTUnwrap(snap.items.first { $0.name == "report.pdf" })
-        snap = await harness.select("item:\(report.id)")
+        // A collection member connects to its container, and the container lists
+        // its members — the clean replacement for the old folder-"context" edge.
+        let main = try XCTUnwrap(snap.items.first { $0.name == "main.swift" })
+        snap = await harness.select("item:\(main.id)")
         let graph = try XCTUnwrap(snap.graph)
-        let contextNeighbor = graph.neighbors.first { $0.selection.hasPrefix("context:") }
-        let context = try XCTUnwrap(contextNeighbor, "Item should connect to a folder context")
+        let container = try XCTUnwrap(graph.neighbors.first { $0.predicate == "in" },
+                                      "Item should connect to its containing collection")
 
-        snap = await harness.select(context.selection)
-        XCTAssertNotNil(snap.graph?.center, "Context hub resolves a real name")
-        XCTAssertFalse(snap.graph?.neighbors.isEmpty ?? true, "Context hub lists member items")
+        snap = await harness.select(container.selection)
+        XCTAssertNotNil(snap.graph?.center, "Container resolves a real name")
+        XCTAssertTrue(snap.graph?.neighbors.contains { $0.predicate == "contains" } ?? false,
+                      "Container lists its member items")
     }
 
     // MARK: - Principle 5: Automation Is Policy Over Memory (Inbox is the fallback)

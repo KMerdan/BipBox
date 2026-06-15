@@ -58,19 +58,22 @@ final class ConnectionsGraphWorkflowTests: XCTestCase {
         XCTAssertFalse(clusterGraph.neighbors.isEmpty, "Cluster lists member files")
         XCTAssertTrue(clusterGraph.neighbors.allSatisfy { $0.selection.hasPrefix("item:") })
 
-        // Zoom into a member file → its ego shows source + cluster (+ maybe context/related).
+        // Zoom into a member file → its ego shows only the clean relations
+        // (similar / topic / in / contains / duplicate) — no provenance edges.
         let memberRef = try XCTUnwrap(clusterGraph.neighbors.first?.selection)
         let fileGraph = await graph(centering: memberRef)
         XCTAssertNotNil(fileGraph.center)
-        XCTAssertTrue(fileGraph.neighbors.contains { $0.predicate == "came from" }, "File knows its source")
-        XCTAssertTrue(fileGraph.neighbors.contains { $0.selection.hasPrefix("cluster:") }, "File knows its group")
+        let cleanPreds: Set<String> = ["similar", "topic", "in", "contains", "duplicate"]
+        XCTAssertTrue(fileGraph.neighbors.allSatisfy { cleanPreds.contains($0.predicate) },
+                      "File ego shows only clean relations, got: \(fileGraph.neighbors.map(\.predicate))")
     }
 
     // MARK: - Workflow 2: every neighbour is navigable (no dead ends)
 
     func testEveryNeighborNavigatesSomewhere() async throws {
-        let report = try await item(named: "report.pdf")
-        let ego = await graph(centering: "item:\(report.id)")
+        // A collection member (src/main.swift) deterministically has edges.
+        let main = try await item(named: "main.swift")
+        let ego = await graph(centering: "item:\(main.id)")
         XCTAssertFalse(ego.neighbors.isEmpty)
 
         for neighbor in ego.neighbors {
@@ -79,23 +82,23 @@ final class ConnectionsGraphWorkflowTests: XCTestCase {
         }
     }
 
-    // MARK: - Workflow 3: source hub round-trip (file → source → back to file)
+    // MARK: - Workflow 3: container round-trip (member → collection → back)
 
-    func testSourceHubRoundTrip() async throws {
-        let report = try await item(named: "report.pdf")
-        let ego = await graph(centering: "item:\(report.id)")
-        let sourceNeighbor = try XCTUnwrap(ego.neighbors.first { $0.selection.hasPrefix("source:") },
-                                           "File ego includes its source")
+    func testContainerRoundTrip() async throws {
+        let main = try await item(named: "main.swift")
+        let ego = await graph(centering: "item:\(main.id)")
+        let container = try XCTUnwrap(ego.neighbors.first { $0.predicate == "in" },
+                                      "A collection member links up to its container")
 
-        // Into the source hub: its members include the file we came from.
-        let hub = await graph(centering: sourceNeighbor.selection)
+        // Into the container: its contents include the file we came from.
+        let hub = await graph(centering: container.selection)
         XCTAssertNotNil(hub.center)
-        XCTAssertTrue(hub.neighbors.contains { $0.selection == "item:\(report.id)" },
-                      "Source hub lists the file that came from it")
+        XCTAssertTrue(hub.neighbors.contains { $0.selection == "item:\(main.id)" },
+                      "The container lists the file it contains")
 
-        // Back to the file: the source is still a neighbour (stable round-trip).
-        let back = await graph(centering: "item:\(report.id)")
-        XCTAssertTrue(back.neighbors.contains { $0.selection == sourceNeighbor.selection })
+        // Back to the file: the container is still a neighbour (stable round-trip).
+        let back = await graph(centering: "item:\(main.id)")
+        XCTAssertTrue(back.neighbors.contains { $0.selection == container.selection })
     }
 
     // MARK: - Workflow 4: cluster hub lists exactly its members
@@ -108,17 +111,16 @@ final class ConnectionsGraphWorkflowTests: XCTestCase {
         XCTAssertEqual(neighborIDs, expected, "Cluster neighbours are exactly its member items")
     }
 
-    // MARK: - Workflow 5: context hub (file → folder context → members include the file)
+    // MARK: - Workflow 5: container lists all its members
 
-    func testContextHubContainsOriginatingFile() async throws {
-        let report = try await item(named: "report.pdf")
-        let ego = await graph(centering: "item:\(report.id)")
-        let contextNeighbor = try XCTUnwrap(ego.neighbors.first { $0.selection.hasPrefix("context:") },
-                                            "File belongs to a folder context")
-        let hub = await graph(centering: contextNeighbor.selection)
-        XCTAssertNotNil(hub.center)
-        XCTAssertTrue(hub.neighbors.contains { $0.selection == "item:\(report.id)" },
-                      "Context hub lists the originating file")
+    func testContainerListsItsMembers() async throws {
+        let main = try await item(named: "main.swift")
+        let ego = await graph(centering: "item:\(main.id)")
+        let container = try XCTUnwrap(ego.neighbors.first { $0.predicate == "in" })
+        let hub = await graph(centering: container.selection)
+        let members = Set(hub.neighbors.filter { $0.predicate == "contains" }.map(\.name))
+        XCTAssertTrue(members.contains("main.swift") && members.contains("util.swift"),
+                      "The src collection lists its members, got: \(members)")
     }
 
     // MARK: - Workflow 6: navigation is deterministic (no stale neighbours)

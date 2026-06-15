@@ -50,12 +50,15 @@ final class WatchedFolderIndexingIntegrationTests: XCTestCase {
         try fm.createDirectory(at: base, withIntermediateDirectories: true)
         try fm.createDirectory(at: watched, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: base); try? fm.removeItem(at: watched) }
-        try "one".write(to: watched.appendingPathComponent("one.txt"), atomically: true, encoding: .utf8)
-        try "two".write(to: watched.appendingPathComponent("two.txt"), atomically: true, encoding: .utf8)
+        // A subfolder becomes a collection unit; its files are members with a
+        // deterministic `contains` link (no embeddings needed).
+        try fm.createDirectory(at: watched.appendingPathComponent("notes"), withIntermediateDirectories: true)
+        try "one".write(to: watched.appendingPathComponent("notes/one.txt"), atomically: true, encoding: .utf8)
+        try "two".write(to: watched.appendingPathComponent("notes/two.txt"), atomically: true, encoding: .utf8)
 
         let services = try BipboxAppServices.makeDefault(paths: BipboxRuntimePaths(baseDirectoryURL: base))
         _ = try await services.sourceLifecycleCoordinator.addWatchedFolder(
-            SourceLifecycleRequest(url: watched, displayName: "Watched", recursivePolicy: .never)
+            SourceLifecycleRequest(url: watched, displayName: "Watched", recursivePolicy: .always)
         )
 
         let library = SearchWorkspaceViewModel(
@@ -74,19 +77,20 @@ final class WatchedFolderIndexingIntegrationTests: XCTestCase {
             )
         )
 
-        let itemID = try XCTUnwrap(library.results.first?.id)
+        let member = try XCTUnwrap(library.results.first { $0.displayName == "one.txt" })
 
-        // Item ego graph must include the folder context as a real neighbor.
-        let itemGraph = await model.loadGraph(center: .item(itemID))
+        // The member's ego links up to its containing collection (clean `in` edge).
+        let itemGraph = await model.loadGraph(center: .item(member.id))
         XCTAssertNotNil(itemGraph.center)
-        let contextNeighbor = itemGraph.neighbors.first { if case .context = $0.selection { return true }; return false }
-        let context = try XCTUnwrap(contextNeighbor, "Item should be linked to its folder context; got \(itemGraph.neighbors.map(\.name))")
+        let containerNeighbor = itemGraph.neighbors.first { $0.pred == "in" }
+        let container = try XCTUnwrap(containerNeighbor,
+                                      "Member should link to its container; got \(itemGraph.neighbors.map(\.name))")
 
-        // Clicking that context must navigate to its member items (not "nowhere").
-        guard case .context(let ctxID) = context.selection else { return XCTFail("expected context selection") }
-        let contextGraph = await model.loadGraph(center: .context(ctxID))
-        XCTAssertNotNil(contextGraph.center, "Context node must resolve a real name, not a placeholder")
-        XCTAssertFalse(contextGraph.neighbors.isEmpty, "Context must list its member items")
-        XCTAssertTrue(contextGraph.neighbors.contains { $0.name == "one.txt" || $0.name == "two.txt" })
+        // Clicking the container lists its member items (not "nowhere").
+        let containerGraph = await model.loadGraph(center: container.selection)
+        XCTAssertNotNil(containerGraph.center, "Container resolves a real name")
+        let members = Set(containerGraph.neighbors.filter { $0.pred == "contains" }.map(\.name))
+        XCTAssertTrue(members.contains("one.txt") && members.contains("two.txt"),
+                      "Container lists its members, got: \(members)")
     }
 }

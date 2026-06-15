@@ -50,7 +50,8 @@ public enum TopicDiscovery {
         membershipThreshold: Double = 0.30,
         topKTopics: Int = 3,
         minTopicSize: Int = 3,
-        edgeTopK: Int = 4
+        edgeTopK: Int = 4,
+        preCentered: Bool = false
     ) -> TopicGraph {
         let n = vectors.count
         guard n >= minTopicSize, let dim = vectors.first?.vector.count, dim > 0 else { return .empty }
@@ -60,15 +61,18 @@ public enum TopicDiscovery {
 
         // 1. Mean-center + renormalize (anisotropy removal — the key fix).
         //    The mean is taken over EVERYTHING (seeds + assign), like the
-        //    experiment's global mean over the full corpus.
-        var mu = [Float](repeating: 0, count: dim)
-        var muCount = 0
-        for v in V where v.count == dim { for d in 0..<dim { mu[d] += v[d] }; muCount += 1 }
-        guard muCount > 0 else { return .empty }
-        for d in 0..<dim { mu[d] /= Float(muCount) }
-        for i in 0..<total where V[i].count == dim {
-            for d in 0..<dim { V[i][d] -= mu[d] }
-            normalize(&V[i])
+        //    experiment's global mean over the full corpus. Skipped when the
+        //    caller already centered+normalized (shared semantic index).
+        if !preCentered {
+            var mu = [Float](repeating: 0, count: dim)
+            var muCount = 0
+            for v in V where v.count == dim { for d in 0..<dim { mu[d] += v[d] }; muCount += 1 }
+            guard muCount > 0 else { return .empty }
+            for d in 0..<dim { mu[d] /= Float(muCount) }
+            for i in 0..<total where V[i].count == dim {
+                for d in 0..<dim { V[i][d] -= mu[d] }
+                normalize(&V[i])
+            }
         }
 
         let cosine: @Sendable ([Float], [Float]) -> Double = { a, b in
